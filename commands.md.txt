@@ -1,0 +1,8 @@
+1.检测图片（支持本地图片 / 网络图片 / 整个文件夹）：
+yolo predict model=yolov8n.pt source="你的图片或文件夹路径"
+
+2.检测视频：
+yolo predict model=yolov8n.pt source="你的视频路径.mp4"
+
+3.调用电脑摄像头实时检测：
+yolo predict model=yolov8n.pt source=0
