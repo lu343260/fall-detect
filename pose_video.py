@@ -12,7 +12,7 @@ fall_detector = FallDetector()
 
 
 # 打开视频
-video = cv2.VideoCapture("test_person2.mp4")
+video = cv2.VideoCapture("test_person3.mp4")
 
 
 while True:

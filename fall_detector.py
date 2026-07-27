@@ -1,11 +1,21 @@
 import numpy as np
 import time
 
+class FallState:
+    NORMAL = 0
+    FALLING = 1
+    ON_GROUND = 2
+
 class FallDetector:
 
     def __init__(self):
-        # 记录疑似跌倒开始时间
+        # 当前状态
+        self.state = FallState.NORMAL
+
+        # 跌倒开始时间
         self.fall_start_time = None
+
+        # 髋部速度计算
         self.previous_hip_y = None
         self.previous_time = None
 
@@ -109,46 +119,73 @@ class FallDetector:
 
     def detect(self, keypoints):
     
-            ratio = self.calculate_body_ratio(keypoints)
-            hip_speed = self.calculate_hip_speed(keypoints)
-            angle = self.calculate_body_angle(keypoints)
+            ratio = float(self.calculate_body_ratio(keypoints))
+            speed = float(self.calculate_hip_speed(keypoints))
+            angle = float(self.calculate_body_angle(keypoints))
 
-            print("髋部下降速度:", hip_speed)
-    
-    
+
+            print("-----------------------")
+
+
+            print("状态", self.state)
+
+
+            print("髋部下降速度:", speed)
+
+
             print("身体宽高比例:", ratio)
 
 
             print("身体倾斜角度:", angle)
-    
-    
-            # 横向程度超过阈值
-            if (
-                ratio > 1.0
-                and angle > 60
-                and hip_speed > 10
-            ):
-    
-    
-                # 第一次发现异常姿态
-                if self.fall_start_time is None:
+
+
+            #当前正常状态
+            if self.state == FallState.NORMAL:
+
+                #开始跌倒
+                if  speed > 1 :
+
+                    self.state = FallState.FALLING
+
                     self.fall_start_time = time.time()
-    
-    
-                duration = time.time() - self.fall_start_time
-    
-    
-                print("疑似跌倒持续时间:", duration)
-    
-    
-                if duration > 3:
-                    return True
-    
-    
-            else:
-    
-                # 恢复正常姿态
-                self.fall_start_time = None
-    
-    
-            return False
+
+                    print("检测到跌倒开始")
+
+            #正在跌倒
+            elif self.state == FallState.FALLING:
+
+               duration = time.time() - self.fall_start_time
+
+               #已经倒地
+               if ratio > 1 and angle > 60 and duration > 1:
+
+                   self.state = FallState.ON_GROUND
+
+                   print("检测到已经倒地")
+
+               #恢复正常
+               elif angle < 30:
+
+                   self.state = FallState.NORMAL
+
+                   self.fall_start_time = None
+
+            #已经倒地
+            elif self.state == FallState.ON_GROUND:
+
+                #人再站起来
+
+                if angle < 40 and ratio <1:
+
+                    self.state = FallState.NORMAL
+
+                    self.fall_start_time = None
+
+                    print("检测到人已经站起来")
+
+            return self.state == FallState.ON_GROUND
+
+        
+
+
+

@@ -1,0 +1,18 @@
+# Python缓存
+__pycache__/
+*.pyc
+
+# VS Code配置
+.vscode/
+
+# YOLO运行结果
+runs/
+
+# 数据集
+datasets/
+
+# 视频文件
+*.mp4
+
+# 模型文件
+*.pt
