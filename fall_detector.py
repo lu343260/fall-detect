@@ -15,6 +15,10 @@ class FallDetector:
         # 跌倒开始时间
         self.fall_start_time = None
 
+        #状态确认计数
+        self.falling_frames = 0
+        self.ground_frames = 0
+
         # 髋部速度计算
         self.previous_hip_y = None
         self.previous_time = None
@@ -145,9 +149,18 @@ class FallDetector:
                 #开始跌倒
                 if  speed > 1 :
 
+                    self.falling_frames += 1
+                    print("falling_frames:", self.falling_frames)
+                else:
+
+                    self.falling_frames = 0
+
+                if self.falling_frames >= 3:
                     self.state = FallState.FALLING
 
                     self.fall_start_time = time.time()
+
+                    self.falling_frames = 0
 
                     print("检测到跌倒开始")
 
@@ -156,19 +169,30 @@ class FallDetector:
 
                duration = time.time() - self.fall_start_time
 
-               #已经倒地
+                 #已经倒地
                if ratio > 1 and angle > 60 and duration > 1:
+                    self.ground_frames += 1
 
-                   self.state = FallState.ON_GROUND
+               else:
+                    self.ground_frames = 0
 
-                   print("检测到已经倒地")
+                    if angle <30:
+                    
+                        self.state = FallState.NORMAL
+                        self.fall_start_time = None
+                        self.falling_frames = 0
+                        print("检测恢复正常")
 
-               #恢复正常
-               elif angle < 30:
+               if self.ground_frames >= 3:
 
-                   self.state = FallState.NORMAL
+                    self.state = FallState.ON_GROUND
+                    self.ground_frames = 0
+                    print("检测到已经倒地")
 
-                   self.fall_start_time = None
+            #恢复正常
+            
+
+               
 
             #已经倒地
             elif self.state == FallState.ON_GROUND:
@@ -184,8 +208,5 @@ class FallDetector:
                     print("检测到人已经站起来")
 
             return self.state == FallState.ON_GROUND
-
-        
-
 
 
