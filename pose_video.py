@@ -7,12 +7,15 @@ frame_count=0
 
 
 # 加载姿态模型
-model = YOLO("yolov8s-pose.pt")
+model = YOLO("yolov8n-pose.pt")
 fall_detector = FallDetector()
 
 
-# 打开视频
-video = cv2.VideoCapture("test_person2.mp4")
+# 打开摄像头
+video = cv2.VideoCapture(1)
+
+video.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+video.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 
 while True:
@@ -23,7 +26,7 @@ while True:
     if not ret:
         break
     #记录这一帧被读取时的单调时间
-    capture_time = time.monotonic()
+    capture_time = time.time()
 
     # YOLO姿态检测
     results = model(
@@ -49,7 +52,6 @@ while True:
     # 置信度检查
     # 跌倒检测
         annotated_frame = results[0].plot()
-        cv2.imshow("YOLO Pose", annotated_frame)
 
 
     if frame_count % 3 == 0 :

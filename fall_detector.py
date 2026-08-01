@@ -22,6 +22,7 @@ class FallDetector:
         # 髋部速度计算
         self.previous_hip_y = None
         self.previous_time = None
+        self.normal_hip_y = None
 
 
     def calculate_body_ratio(self, keypoints):
@@ -52,14 +53,13 @@ class FallDetector:
         计算髋部关键点的速度
         """
 
+        current_time = time.time()
         # 获取左髋和右髋关键点
         left_hip = keypoints[11]
         right_hip = keypoints[12]
 
         # 计算髋部关键点的平均位置
         hip_y = (left_hip[1] + right_hip[1]) / 2
-
-        current_time = time.time()
 
         speed = 0
 
@@ -78,6 +78,23 @@ class FallDetector:
         self.previous_time = current_time
 
         return speed
+
+
+    def calculate_hip_drop(self, keypoints):
+        """
+        计算髋部垂直位移
+        """
+        left_hip = keypoints[11]
+        right_hip = keypoints[12]
+
+        hip_y = (left_hip[1] + right_hip[1])/2
+
+        if self.normal_hip_y is None:
+            self.normal_hip_y = hip_y
+
+        drop = self.normal_hip_y - hip_y
+
+        return drop
 
     def calculate_body_angle(self, keypoints):
         """
@@ -122,11 +139,12 @@ class FallDetector:
 
 
     def detect(self, keypoints):
+        
     
             ratio = float(self.calculate_body_ratio(keypoints))
             speed = float(self.calculate_hip_speed(keypoints))
             angle = float(self.calculate_body_angle(keypoints))
-
+            hip_drop = float(self.calculate_hip_drop(keypoints))
 
             print("-----------------------")
 
@@ -143,11 +161,14 @@ class FallDetector:
             print("身体倾斜角度:", angle)
 
 
+            print("髋部下降距离:", hip_drop)
+
+
             #当前正常状态
             if self.state == FallState.NORMAL:
 
                 #开始跌倒
-                if  speed > 1 :
+                if  speed > 1 and hip_drop >40 :
 
                     self.falling_frames += 1
                     print("falling_frames:", self.falling_frames)
@@ -170,13 +191,13 @@ class FallDetector:
                duration = time.time() - self.fall_start_time
 
                  #已经倒地
-               if ratio > 1 and angle > 60 and duration > 1:
+               if  angle > 45 and hip_drop>40 and duration > 1:
                     self.ground_frames += 1
 
                else:
                     self.ground_frames = 0
 
-                    if angle <30:
+                    if angle <30 and hip_drop < 20:
                     
                         self.state = FallState.NORMAL
                         self.fall_start_time = None
@@ -187,12 +208,7 @@ class FallDetector:
 
                     self.state = FallState.ON_GROUND
                     self.ground_frames = 0
-                    print("检测到已经倒地")
-
-            #恢复正常
-            
-
-               
+                    print("检测到已经倒地")               
 
             #已经倒地
             elif self.state == FallState.ON_GROUND:
