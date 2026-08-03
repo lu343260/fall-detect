@@ -2,6 +2,7 @@ import numpy as np
 import time
 
 class FallState:
+    INITIALIZING = -1
     NORMAL = 0
     FALLING = 1
     ON_GROUND = 2
@@ -10,7 +11,7 @@ class FallDetector:
 
     def __init__(self):
         # 当前状态
-        self.state = FallState.NORMAL
+        self.state = FallState.INITIALIZING
 
         # 跌倒开始时间
         self.fall_start_time = None
@@ -22,7 +23,10 @@ class FallDetector:
         # 髋部速度计算
         self.previous_hip_y = None
         self.previous_time = None
-        self.normal_hip_y = None
+        self.baseline_hip_y = None
+        self.hip_y_samples = []
+        self.calibration_sample_count = 10
+        self.calibration_std_threshold = 10.0
 
 
     def calculate_body_ratio(self, keypoints):
@@ -48,6 +52,44 @@ class FallDetector:
         return ratio
 
 
+    def calculate_hip_y(self, keypoints):
+        return float((keypoints[11][1] + keypoints[12][1]) / 2)
+
+
+    def collect_baseline_sample(self, keypoints):
+        hip_y = self.calculate_hip_y(keypoints)
+        self.hip_y_samples.append(hip_y)
+
+        print(
+            f"初始化样本: {len(self.hip_y_samples)}"
+            f"/{self.calibration_sample_count}"
+        )
+
+        if len(self.hip_y_samples) < self.calibration_sample_count:
+            return False
+
+        hip_y_std = float(np.std(self.hip_y_samples))
+
+        if hip_y_std < self.calibration_std_threshold:
+            self.baseline_hip_y = float(np.median(self.hip_y_samples))
+            self.hip_y_samples.clear()
+            self.state = FallState.NORMAL
+            self.previous_hip_y = None
+            self.previous_time = None
+            self.falling_frames = 0
+            self.ground_frames = 0
+
+            print("初始化成功")
+            print("baseline_hip_y:", self.baseline_hip_y)
+            print("hip_y_std:", hip_y_std)
+            return True
+
+        self.hip_y_samples.clear()
+        print("初始化不稳定，重新采样")
+        print("hip_y_std:", hip_y_std)
+        return False
+
+
     def calculate_hip_speed(self, keypoints):
         """
         计算髋部关键点的速度
@@ -59,7 +101,7 @@ class FallDetector:
         right_hip = keypoints[12]
 
         # 计算髋部关键点的平均位置
-        hip_y = (left_hip[1] + right_hip[1]) / 2
+        hip_y = self.calculate_hip_y(keypoints)
 
         speed = 0
 
@@ -87,14 +129,28 @@ class FallDetector:
         left_hip = keypoints[11]
         right_hip = keypoints[12]
 
-        hip_y = (left_hip[1] + right_hip[1])/2
+        hip_y = self.calculate_hip_y(keypoints)
 
-        if self.normal_hip_y is None:
-            self.normal_hip_y = hip_y
+        if self.baseline_hip_y is None:
+            return 0.0
 
-        drop = self.normal_hip_y - hip_y
+        drop = hip_y - self.baseline_hip_y
 
         return drop
+
+
+    def update_baseline(self, keypoints):
+        current_hip_y = self.calculate_hip_y(keypoints)
+        alpha = 0.05
+
+        if self.baseline_hip_y is None:
+            self.baseline_hip_y = current_hip_y
+            return
+
+        self.baseline_hip_y = (
+            (1 - alpha) * self.baseline_hip_y
+            + alpha * current_hip_y
+        )
 
     def calculate_body_angle(self, keypoints):
         """
@@ -139,7 +195,10 @@ class FallDetector:
 
 
     def detect(self, keypoints):
-        
+            if self.state == FallState.INITIALIZING:
+                self.collect_baseline_sample(keypoints)
+                return False
+
     
             ratio = float(self.calculate_body_ratio(keypoints))
             speed = float(self.calculate_hip_speed(keypoints))
@@ -173,10 +232,12 @@ class FallDetector:
                     self.falling_frames += 1
                     print("falling_frames:", self.falling_frames)
                 else:
+                    self.falling_frames = max(
+                            0,
+                        self.falling_frames - 1
+                    )
 
-                    self.falling_frames = 0
-
-                if self.falling_frames >= 3:
+                if self.falling_frames >= 2:
                     self.state = FallState.FALLING
 
                     self.fall_start_time = time.time()
@@ -186,6 +247,9 @@ class FallDetector:
                     print("检测到跌倒开始")
 
             #正在跌倒
+                if self.state == FallState.NORMAL:
+                    self.update_baseline(keypoints)
+
             elif self.state == FallState.FALLING:
 
                duration = time.time() - self.fall_start_time

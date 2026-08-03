@@ -12,7 +12,7 @@ fall_detector = FallDetector()
 
 
 # 打开摄像头
-video = cv2.VideoCapture(1)
+video = cv2.VideoCapture("test_person.mp4")
 
 video.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 video.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -47,6 +47,9 @@ while True:
     confidence = keypoints_conf[0].cpu().numpy()
 
     required_points = [5, 6, 11, 12]
+
+    if min(confidence[i] for i in required_points) < 0.5:
+        continue
 
     if len(keypoints_xy) > 0:
     # 置信度检查
