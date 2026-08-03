@@ -12,7 +12,7 @@ fall_detector = FallDetector()
 
 
 # 打开摄像头
-video = cv2.VideoCapture("test_person.mp4")
+video=cv2.VideoCapture(1)
 
 video.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 video.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -28,6 +28,9 @@ while True:
     #记录这一帧被读取时的单调时间
     capture_time = time.time()
 
+    # 默认显示原始画面，即使当前帧没有检测到人
+    annotated_frame = frame.copy()
+
     # YOLO姿态检测
     results = model(
         frame,
@@ -40,28 +43,28 @@ while True:
     keypoints_xy = results[0].keypoints.xy
     keypoints_conf = results[0].keypoints.conf
 
-    if len(keypoints_xy) == 0:
-        continue
-
-    person = keypoints_xy[0].cpu().numpy()
-    confidence = keypoints_conf[0].cpu().numpy()
-
-    required_points = [5, 6, 11, 12]
-
-    if min(confidence[i] for i in required_points) < 0.5:
-        continue
 
     if len(keypoints_xy) > 0:
     # 置信度检查
     # 跌倒检测
         annotated_frame = results[0].plot()
 
+        person = keypoints_xy[0].cpu().numpy()
+        confidence = keypoints_conf[0].cpu().numpy()
 
-    if frame_count % 3 == 0 :
+    # 跌倒判断依赖肩膀和髋部，先确认这些关键点足够可靠。
+        required_points = [5, 6, 11, 12]
+
+        points_valid = all(
+            confidence[i] >= 0.5
+            for i in required_points
+        )
+
+
+    if  points_valid and frame_count % 3 == 0 :
 
         fallen = fall_detector.detect(
              person
-             
              )
 
         if fallen:
