@@ -26,7 +26,8 @@ while True:
     if not ret:
         break
     #记录这一帧被读取时的单调时间
-    capture_time = time.time()
+    # 记录当前帧被读取时的单调时间，供速度和持续时间计算使用。
+    capture_time = time.monotonic()
 
     # 默认显示原始画面，即使当前帧没有检测到人
     annotated_frame = frame.copy()
@@ -43,6 +44,9 @@ while True:
     keypoints_xy = results[0].keypoints.xy
     keypoints_conf = results[0].keypoints.conf
 
+    # 默认认为当前帧没有可用人体，保证后面的显示逻辑仍然执行。
+    person = None
+    points_valid = False
 
     if len(keypoints_xy) > 0:
     # 置信度检查
@@ -61,10 +65,11 @@ while True:
         )
 
 
-    if  points_valid and frame_count % 3 == 0 :
+    if points_valid and frame_count % 3 == 0:
 
         fallen = fall_detector.detect(
-             person
+             person,
+             capture_time
              )
 
         if fallen:
@@ -74,8 +79,6 @@ while True:
         
 
     # 绘制骨架
-    annotated_frame = results[0].plot()
-
     small_frame = cv2.resize(
     annotated_frame,
     (800,600)

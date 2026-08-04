@@ -1,5 +1,4 @@
 import numpy as np
-import time
 
 class FallState:
     # 程序刚启动时，先收集稳定的人体姿态，不进行跌倒判断。
@@ -34,13 +33,12 @@ class FallDetector:
         self.calibration_std_threshold = 10.0
 
         # 跌倒判断阈值，集中放在这里方便后续用测试视频调参。
-        self.speed_threshold = 1.0
-        self.drop_threshold = 40.0
-        self.ground_angle_threshold = 45.0
-        self.ground_duration_threshold = 1.0
-        self.falling_confirm_frames = 2
-        self.ground_confirm_frames = 3
-
+        self.speed_threshold = 1.0  #髋部下降速度
+        self.drop_threshold = 40.0  #髋部相对基准
+        self.ground_angle_threshold = 45.0    #身体倾斜角度
+        self.ground_duration_threshold = 1.0  #疑似跌倒状态持续时间
+        self.falling_confirm_frames = 2  #满足快速下降条件次数
+        self.ground_confirm_frames = 3   #满足倒地条件次数
 
     def calculate_body_ratio(self, keypoints):
         """
@@ -66,11 +64,8 @@ class FallDetector:
 
 
     def calculate_hip_y(self, keypoints):
-        """返回当前帧左右髋部中心的 y 坐标。
-
-        图像坐标的 y 轴通常是向下增大的，因此数值变大通常表示
-        髋部在画面中向下移动。使用左右髋部平均值可以减少单个
-        关键点抖动带来的影响。
+        """
+        返回当前帧左右髋部中心的 y 坐标
         """
         return float((keypoints[11][1] + keypoints[12][1]) / 2)
 
@@ -78,7 +73,7 @@ class FallDetector:
     def collect_baseline_sample(self, keypoints):
         """收集初始化样本，并在样本稳定后建立 baseline。"""
         hip_y = self.calculate_hip_y(keypoints)
-        self.hip_y_samples.append(hip_y)
+        self.hip_y_samples.append(hip_y)  #相当于list.append()，在列表末尾添加元素
 
         print(
             f"初始化样本: {len(self.hip_y_samples)}"
@@ -89,11 +84,11 @@ class FallDetector:
             return False
 
         # 标准差越小，说明这段时间人体的髋部高度越稳定。
-        hip_y_std = float(np.std(self.hip_y_samples))
+        hip_y_std = float(np.std(self.hip_y_samples))  #计算标准差
 
         if hip_y_std < self.calibration_std_threshold:
             # 中位数比单帧值更不容易受到关键点偶发抖动影响。
-            self.baseline_hip_y = float(np.median(self.hip_y_samples))
+            self.baseline_hip_y = float(np.median(self.hip_y_samples))  #取中间值
             self.hip_y_samples.clear()
             self.state = FallState.NORMAL
             self.previous_hip_y = None
@@ -112,12 +107,11 @@ class FallDetector:
         return False
 
 
-    def calculate_hip_speed(self, keypoints):
+    def calculate_hip_speed(self, keypoints, current_time):
         """
         计算髋部关键点的速度
         """
 
-        current_time = time.time()
         # 获取左髋和右髋关键点
         left_hip = keypoints[11]
         right_hip = keypoints[12]
@@ -224,7 +218,7 @@ class FallDetector:
         return angle
 
 
-    def detect(self, keypoints):
+    def detect(self, keypoints, current_time):
             # 初始化阶段只收集样本，禁止速度、角度和 hip_drop 参与判断。
             if self.state == FallState.INITIALIZING:
                 self.collect_baseline_sample(keypoints)
@@ -232,7 +226,9 @@ class FallDetector:
 
     
             ratio = float(self.calculate_body_ratio(keypoints))
-            speed = float(self.calculate_hip_speed(keypoints))
+            speed = float(
+                self.calculate_hip_speed(keypoints, current_time)
+            )
             angle = float(self.calculate_body_angle(keypoints))
             hip_drop = float(self.calculate_hip_drop(keypoints))
 
@@ -268,7 +264,7 @@ class FallDetector:
                 if self.falling_frames >= self.falling_confirm_frames:
                     self.state = FallState.FALLING
 
-                    self.fall_start_time = time.time()
+                    self.fall_start_time = current_time
 
                     self.falling_frames = 0
 
@@ -281,7 +277,7 @@ class FallDetector:
 
             elif self.state == FallState.FALLING:
 
-               duration = time.time() - self.fall_start_time
+               duration = current_time - self.fall_start_time
 
                  #已经倒地
                if (
