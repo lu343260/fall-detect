@@ -1,4 +1,4 @@
-from ultralytics import YOLO
+from onnx_inference import ONNXPoseDetector
 import cv2
 from fall_detector import FallDetector
 import time
@@ -9,7 +9,7 @@ DEBUG = False  # True 时打印每帧状态，方便调参
 
 
 # 加载姿态模型
-model = YOLO("yolo11n-pose.pt")
+model = ONNXPoseDetector("yolo11n-pose.onnx")
 fall_detector = FallDetector()
 
 
@@ -49,12 +49,7 @@ while True:
     annotated_frame = frame.copy()
 
     # YOLO姿态检测
-    results = model(
-        frame,
-        conf=0.3,
-        classes=[0],
-        verbose=False
-    )
+    results = model(frame)
 
     # 获取关键点
     keypoints_xy = results[0].keypoints.xy
@@ -69,8 +64,8 @@ while True:
     # 跌倒检测
         annotated_frame = results[0].plot()
 
-        person = keypoints_xy[0].cpu().numpy()
-        confidence = keypoints_conf[0].cpu().numpy()
+        person = keypoints_xy[0]
+        confidence = keypoints_conf[0]
 
     # 跌倒判断依赖肩膀和髋部，先确认这些关键点足够可靠。
         required_points = [5, 6, 11, 12]
