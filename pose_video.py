@@ -25,6 +25,9 @@ while True:
 
     if not ret:
         break
+
+    frame = cv2.rotate(frame, cv2.ROTATE_180)
+    results = model(frame)# 翻转画面，避免镜像
     #记录这一帧被读取时的单调时间
     # 记录当前帧被读取时的单调时间，供速度和持续时间计算使用。
     capture_time = time.monotonic()
