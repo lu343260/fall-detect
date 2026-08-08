@@ -24,6 +24,10 @@ class FallDetector:
         self.falling_frames = 0
         self.ground_frames = 0
 
+        # 恢复确认计数
+        self.recovery_frames = 0
+        self.recovery_confirm_frames = 3  #连续满足恢复条件次数
+
         # 髋部速度计算
         self.previous_hip_y = None
         self.previous_time = None
@@ -109,6 +113,7 @@ class FallDetector:
             self.previous_time = None
             self.falling_frames = 0
             self.ground_frames = 0
+            self.recovery_frames = 0
 
             print("初始化成功")
             print("baseline_hip_y:", self.baseline_hip_y)
@@ -279,6 +284,7 @@ class FallDetector:
                 self.state = FallState.FALLING
                 self.fall_start_time = current_time
                 self.falling_frames = 0
+                self.recovery_frames = 0
                 print("检测到跌倒开始")
 
         elif self.state == FallState.FALLING:
@@ -289,30 +295,41 @@ class FallDetector:
                 and duration > self.ground_duration_threshold
             ):
                 self.ground_frames += 1
+                self.recovery_frames = 0
             else:
                 self.ground_frames = 0
                 if angle < 30 and hip_drop < 20:
-                    self.state = FallState.NORMAL
-                    self.fall_start_time = None
-                    self.falling_frames = 0
-                    print("检测恢复正常")
+                    self.recovery_frames += 1
+                    if self.recovery_frames >= self.recovery_confirm_frames:
+                        self.state = FallState.NORMAL
+                        self.fall_start_time = None
+                        self.falling_frames = 0
+                        self.ground_frames = 0
+                        self.recovery_frames = 0
+                        self.hip_y_history.clear()
+                        print("检测恢复正常")
+                else:
+                    self.recovery_frames = 0
 
             if self.ground_frames >= self.ground_confirm_frames:
                 self.state = FallState.ON_GROUND
                 self.ground_frames = 0
+                self.recovery_frames = 0
                 print("检测到已经倒地")
 
         elif self.state == FallState.ON_GROUND:
-            print(
-    "恢复检测:",
-    "angle=", angle,
-    "ratio=", ratio,
-    "hip_drop=", hip_drop
-)
             if angle < 40 and ratio < 0.8:
-                self.state = FallState.NORMAL
-                self.fall_start_time = None
-                print("检测到人已经站起来")
+                self.recovery_frames += 1
+                if self.recovery_frames >= self.recovery_confirm_frames:
+                    self.state = FallState.NORMAL
+                    self.fall_start_time = None
+                    self.falling_frames = 0
+                    self.ground_frames = 0
+                    self.recovery_frames = 0
+                    self.hip_y_history.clear()
+                    print("检测到人已经站起来")
+            else:
+                self.recovery_frames = 0
 
         result = DetectionResult()
         result.state = self.state.value

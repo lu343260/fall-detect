@@ -91,7 +91,9 @@ while True:
         f"状态:{result.state} | "
         f"跌倒:{result.fall}"
         )
-
+        print(
+        f"髋间距离:{result.hip_width:.1f}"
+        )
         if result is not None and DEBUG:
             data = result.to_dict()
             print(
@@ -113,7 +115,6 @@ while True:
             "YOLO Pose",
             annotated_frame
         )
-
 
     # 按q退出
     if cv2.waitKey(1) & 0xff == ord('q'):
