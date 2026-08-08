@@ -5,6 +5,8 @@ import time
 
 frame_count=0
 
+DEBUG = False  # True 时打印每帧状态，方便调参
+
 
 # 加载姿态模型
 model = YOLO("yolov8n-pose.pt")
@@ -17,6 +19,17 @@ video=cv2.VideoCapture(1)
 video.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 video.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
+cv2.namedWindow(
+    "YOLO Pose",
+    cv2.WINDOW_NORMAL
+)
+
+cv2.resizeWindow(
+    "YOLO Pose",
+    640,
+    480
+)
+
 
 while True:
     frame_count+=1
@@ -27,7 +40,7 @@ while True:
         break
 
     frame = cv2.rotate(frame, cv2.ROTATE_180)
-    results = model(frame)# 翻转画面，避免镜像
+    # 翻转画面，避免镜像
     #记录这一帧被读取时的单调时间
     # 记录当前帧被读取时的单调时间，供速度和持续时间计算使用。
     capture_time = time.monotonic()
@@ -47,7 +60,7 @@ while True:
     keypoints_xy = results[0].keypoints.xy
     keypoints_conf = results[0].keypoints.conf
 
-    # 默认认为当前帧没有可用人体，保证后面的显示逻辑仍然执行。
+    # 默认认为当前帧没有可用人体，保证后面的显示逻辑仍然执行
     person = None
     points_valid = False
 
@@ -70,29 +83,36 @@ while True:
 
     if points_valid and frame_count % 3 == 0:
 
-        fallen = fall_detector.detect(
+        result = fall_detector.detect(
              person,
              capture_time
              )
+        print(
+        f"状态:{result.state} | "
+        f"跌倒:{result.fall}"
+        )
 
-        if fallen:
-            print("⚠️ 检测到可能跌倒")
+        if result is not None and DEBUG:
+            data = result.to_dict()
+            print(
+                f"状态:{data['state']} | "
+                f"髋部({data['hip_x']:.1f},{data['hip_y']:.1f}) | "
+                f"宽度:{data['hip_width']:.1f} | "
+                f"速度:{data['speed']:.1f} | "
+                f"下降:{data['hip_drop']:.1f}"
+            )
 
-        print("----------------")
+        if DEBUG:
+            print("----------------")
         
 
     # 绘制骨架
-    small_frame = cv2.resize(
-    annotated_frame,
-    (800,600)
-)
-
-
-    # 显示
-    cv2.imshow(
-        "YOLO Pose",
-        small_frame
-    )
+    if annotated_frame is not None:
+        # 显示
+        cv2.imshow(
+            "YOLO Pose",
+            annotated_frame
+        )
 
 
     # 按q退出

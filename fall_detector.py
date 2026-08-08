@@ -1,7 +1,9 @@
 import numpy as np
 from collections import deque
+from detection_result import DetectionResult
+from enum import Enum
 
-class FallState:
+class FallState(Enum):
     # 程序刚启动时，先收集稳定的人体姿态，不进行跌倒判断。
     INITIALIZING = -1
     NORMAL = 0
@@ -78,14 +80,9 @@ class FallDetector:
         返回当前帧左右髋部中心的平滑 y 坐标
         """
         hip_y = self.calculate_hip_y(keypoints)
-        if len(self.hip_y_history)>0:
-            last = self.hip_y_history[-1]
-            if abs(hip_y-last)>50:
-                hip_y=last
         self.hip_y_history.append(hip_y)
         smooth_hip_y = np.mean(self.hip_y_history)
         return smooth_hip_y
-
 
     def collect_baseline_sample(self, keypoints):
         """收集初始化样本，并在样本稳定后建立 baseline。"""
@@ -129,34 +126,27 @@ class FallDetector:
         计算髋部关键点的速度
         """
 
-        # 获取左髋和右髋关键点
-        left_hip = keypoints[11]
-        right_hip = keypoints[12]
+        # 直接用原始髋部 y（不经过平滑），保证快速下落能被测到。
+        hip_y = self.calculate_hip_y(keypoints)
 
-        # 计算髋部关键点的平均位置
-        # 当前帧的髋部中心 y 坐标。
-        hip_y = self.get_smooth_hip_y(keypoints)
+        speed = 0.0
 
-        speed = 0
-
-        if self.previous_hip_y is not None :
+        if self.previous_hip_y is not None:
 
             dy = hip_y - self.previous_hip_y
 
             dt = current_time - self.previous_time
 
             if dt > 0:
-
                 # y 变大表示向下移动；只保留向下速度，过滤向上移动。
-                speed = max(speed, 0)
-                speed = min(speed, 50)  # 限制最大速度，避免异常值影响判断。
-
+                speed = dy / dt
+                speed = max(speed, 0.0)
+                speed = min(speed, 50.0)  # 限制最大速度，避免异常值影响判断。
 
         self.previous_hip_y = hip_y
         self.previous_time = current_time
 
         return speed
-
 
     def calculate_hip_drop(self, keypoints):
         """
@@ -224,6 +214,7 @@ class FallDetector:
 
         dy=shoulder_y - hip_y
 
+
         #防止除0
         if dy == 0:
             return 90
@@ -235,105 +226,105 @@ class FallDetector:
 
         return angle
 
+    def calculate_hip_info(self, keypoints):
+
+        left_hip = keypoints[11]
+        right_hip = keypoints[12]
+
+        hip_x = (
+        left_hip[0] + right_hip[0]
+        ) / 2
+
+        hip_y = (
+        left_hip[1] + right_hip[1]
+        ) / 2
+
+        hip_width = abs(
+        right_hip[0] - left_hip[0]
+        )
+
+        return hip_x, hip_y, hip_width
+
 
     def detect(self, keypoints, current_time):
         # 初始化阶段只收集样本，禁止速度、角度和 hip_drop 参与判断。
         if self.state == FallState.INITIALIZING:
             self.collect_baseline_sample(keypoints)
-            return False
+            result = DetectionResult()
+            result.state = self.state.value
+            result.initializing = True
+            return result
 
-    
         ratio = float(self.calculate_body_ratio(keypoints))
-        speed = float(
-            self.calculate_hip_speed(keypoints, current_time)
-        )
+        speed = float(self.calculate_hip_speed(keypoints, current_time))
         angle = float(self.calculate_body_angle(keypoints))
         hip_drop = float(self.calculate_hip_drop(keypoints))
+        hip_x, hip_y, hip_width = self.calculate_hip_info(keypoints)
 
-        print("-----------------------")
-
-        # 输出当前帧的主要特征，便于比较站立、弯腰和跌倒时的数值。
-        print("state:", self.state)
-        print("speed:", speed)
-        print("angle:", angle)
-        print("hip_drop:", hip_drop)
-
-
-        print("ratio:", ratio)
-
-
-         #当前正常状态
+        # 状态机：三种状态平级分支
         if self.state == FallState.NORMAL:
-
-            #开始跌倒
+            self.update_baseline(keypoints)
             if (
                 speed > self.speed_threshold
                 and hip_drop > self.drop_threshold
             ):
-
                 self.falling_frames += 1
-                print("falling_frames:", self.falling_frames)
             else:
                 self.falling_frames = max(
-                        0,
+                    0,
                     self.falling_frames - 1
                 )
 
             if self.falling_frames >= self.falling_confirm_frames:
                 self.state = FallState.FALLING
-
                 self.fall_start_time = current_time
-
                 self.falling_frames = 0
-
                 print("检测到跌倒开始")
 
-            #正在跌倒
-                # 只有当前帧仍处于 NORMAL，才允许更新 baseline。
-                if self.state == FallState.NORMAL:
-                    self.update_baseline(keypoints)
-
-            elif self.state == FallState.FALLING:
-
-               duration = current_time - self.fall_start_time
-
-                 #已经倒地
-               if (
-                   angle > self.ground_angle_threshold
-                   and hip_drop > self.drop_threshold
-                   and duration > self.ground_duration_threshold
-               ):
-                    self.ground_frames += 1
-
-               else:
-                    self.ground_frames = 0
-
-                    if angle <30 and hip_drop < 20:
-                    
-                        self.state = FallState.NORMAL
-                        self.fall_start_time = None
-                        self.falling_frames = 0
-                        print("检测恢复正常")
-
-               if self.ground_frames >= self.ground_confirm_frames:
-
-                    self.state = FallState.ON_GROUND
-                    self.ground_frames = 0
-                    print("检测到已经倒地")               
-
-            #已经倒地
-            elif self.state == FallState.ON_GROUND:
-
-                #人再站起来
-
-                if angle < 40 and ratio <1:
-
+        elif self.state == FallState.FALLING:
+            duration = current_time - self.fall_start_time
+            if (
+                angle > self.ground_angle_threshold
+                and hip_drop > self.drop_threshold
+                and duration > self.ground_duration_threshold
+            ):
+                self.ground_frames += 1
+            else:
+                self.ground_frames = 0
+                if angle < 30 and hip_drop < 20:
                     self.state = FallState.NORMAL
-
                     self.fall_start_time = None
+                    self.falling_frames = 0
+                    print("检测恢复正常")
 
-                    print("检测到人已经站起来")
+            if self.ground_frames >= self.ground_confirm_frames:
+                self.state = FallState.ON_GROUND
+                self.ground_frames = 0
+                print("检测到已经倒地")
 
-            return self.state == FallState.ON_GROUND
+        elif self.state == FallState.ON_GROUND:
+            print(
+    "恢复检测:",
+    "angle=", angle,
+    "ratio=", ratio,
+    "hip_drop=", hip_drop
+)
+            if angle < 40 and ratio < 0.8:
+                self.state = FallState.NORMAL
+                self.fall_start_time = None
+                print("检测到人已经站起来")
 
-
+        result = DetectionResult()
+        result.state = self.state.value
+        result.fall = (
+            self.state == FallState.FALLING
+            or self.state == FallState.ON_GROUND
+        )
+        result.hip_x = hip_x
+        result.hip_y = hip_y
+        result.hip_width = hip_width
+        result.angle = angle
+        result.speed = speed
+        result.ratio = ratio
+        result.hip_drop = hip_drop
+        return result
