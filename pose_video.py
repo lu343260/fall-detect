@@ -9,7 +9,7 @@ DEBUG = False  # True 时打印每帧状态，方便调参
 
 
 # 加载姿态模型
-model = YOLO("yolov8n-pose.pt")
+model = YOLO("yolo11n-pose.pt")
 fall_detector = FallDetector()
 
 
