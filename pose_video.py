@@ -14,7 +14,7 @@ fall_detector = FallDetector()
 
 
 # 打开摄像头
-video=cv2.VideoCapture(1)
+video=cv2.VideoCapture(0)
 
 video.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 video.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
