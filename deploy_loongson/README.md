@@ -9,7 +9,7 @@ export, or PyTorch model dependency.
 python3 -m pip install -r requirements.txt
 ```
 
-Copy `yolo11n-pose.onnx` into this directory, then connect a camera and run:
+The `yolo11n-pose.onnx` model is already included in this directory. Connect a camera and run:
 
 ```bash
 python3 pose_video.py --camera 0
