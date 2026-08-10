@@ -9,7 +9,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import onnxruntime as ort
 
 
 CONF_THRES = 0.3
@@ -193,17 +192,15 @@ class ONNXPoseDetector:
             path = Path(__file__).resolve().parent / path
         if not path.exists():
             raise FileNotFoundError(f"ONNX model not found: {path.resolve()}")
-        self.session = ort.InferenceSession(
-            str(path), providers=["CPUExecutionProvider"],
-        )
-        self.input_name = self.session.get_inputs()[0].name
-        self.output_name = self.session.get_outputs()[0].name
+        self.net = cv2.dnn.readNetFromONNX(str(path))
+        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        self.output_name = self.net.getUnconnectedOutLayersNames()[0]
 
     def __call__(self, frame: np.ndarray):
         blob, ratio, padding = preprocess(frame)
-        output = self.session.run(
-            [self.output_name], {self.input_name: blob},
-        )[0]
+        self.net.setInput(blob)
+        output = self.net.forward(self.output_name)
         boxes, keypoints, _ = postprocess(
             output, frame.shape[:2], ratio, padding,
         )
