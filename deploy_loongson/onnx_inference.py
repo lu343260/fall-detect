@@ -6,6 +6,7 @@ The public interface intentionally matches the current pose_video.py usage:
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import cv2
 import numpy as np
@@ -13,7 +14,7 @@ import numpy as np
 
 CONF_THRES = 0.3
 IOU_THRES = 0.45
-IMGSZ = 640
+IMGSZ = 320
 NUM_KEYPOINTS = 17
 NUM_KEYPOINT_VALUES = NUM_KEYPOINTS * 3
 
@@ -200,7 +201,9 @@ class ONNXPoseDetector:
     def __call__(self, frame: np.ndarray):
         blob, ratio, padding = preprocess(frame)
         self.net.setInput(blob)
+        start = time.time()
         output = self.net.forward(self.output_name)
+        print(f"[DNN] forward time={(time.time() - start) * 1000:.2f} ms")
         boxes, keypoints, _ = postprocess(
             output, frame.shape[:2], ratio, padding,
         )

@@ -7,7 +7,11 @@ import time
 import cv2
 
 from fall_detector import FallDetector
+import onnx_inference
 from onnx_inference import ONNXPoseDetector
+
+
+SHOW_DISPLAY = False  # Loongson headless environment: keep HighGUI disabled by default.
 
 
 def parse_args():
@@ -23,8 +27,17 @@ def parse_args():
 
 def main():
     args = parse_args()
+    show_display = SHOW_DISPLAY and not args.no_display
     process_every = max(1, args.process_every)
     model = ONNXPoseDetector("yolo11n-pose.onnx")
+    print(
+        f"[BOOT] loading yolo11n-pose.onnx "
+        f"(input {onnx_inference.IMGSZ}x{onnx_inference.IMGSZ})"
+    )
+    print(
+        f"({onnx_inference.IMGSZ}x{onnx_inference.IMGSZ} model; "
+        "Ctrl-C to abort if too slow)"
+    )
     fall_detector = FallDetector()
     video = cv2.VideoCapture(args.camera)
     video.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
@@ -33,7 +46,7 @@ def main():
     if not video.isOpened():
         raise RuntimeError(f"Cannot open camera: {args.camera}")
 
-    if not args.no_display:
+    if show_display:
         cv2.namedWindow("ONNX Pose", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("ONNX Pose", args.width, args.height)
 
@@ -49,13 +62,16 @@ def main():
 
             capture_time = time.monotonic()
             annotated_frame = frame.copy()
+            infer_start = time.monotonic()
             results = model(frame)
+            infer_time = time.monotonic() - infer_start
             result = results[0]
             keypoints_xy = result.keypoints.xy
             keypoints_conf = result.keypoints.conf
 
             if len(keypoints_xy) > 0:
-                annotated_frame = result.plot()
+                if show_display:
+                    annotated_frame = result.plot()
                 person = keypoints_xy[0]
                 confidence = keypoints_conf[0]
                 required_points = [5, 6, 11, 12]
@@ -64,17 +80,29 @@ def main():
                 person = None
                 points_valid = False
 
+            detection = None
             if points_valid and frame_count % process_every == 0:
                 detection = fall_detector.detect(person, capture_time)
-                print(f"state={detection.state.value} fall={detection.fall}")
+            detector_state = fall_detector.state
+            state_object = detection.state if detection is not None else detector_state
+            state = (
+                state_object.value
+                if hasattr(state_object, "value")
+                else state_object
+            )
+            fall = detection.fall if detection is not None else state in (1, 2)
+            print(
+                f"[INFER] persons={len(keypoints_xy)} "
+                f"time={infer_time:.3f}s state={state} fall={fall}"
+            )
 
-            if not args.no_display:
+            if show_display:
                 cv2.imshow("ONNX Pose", annotated_frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
     finally:
         video.release()
-        if not args.no_display:
+        if show_display:
             cv2.destroyAllWindows()
 
 
