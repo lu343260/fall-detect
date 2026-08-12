@@ -3,8 +3,12 @@ import cv2
 from fall_detector import FallDetector
 import time
 from collections import deque
+from performance_logger import PerformanceLogger
 
-FRAME_SKIP = 1  # 摄像头每读取 5 帧调用一次 YOLO 模型
+# 实验配置：修改这里即可切换模型、输入尺寸和固定跳帧参数。
+MODEL_NAME = "yolo11n-pose.onnx"
+INPUT_SIZE = 640
+FRAME_SKIP = 1
 frame_count = 0
 camera_frame_times = deque(maxlen=30)
 camera_fps = 0.0
@@ -16,11 +20,20 @@ ai_fps = 0.0
 inference_time_ms = 0.0
 last_result = None
 
+performance_logger = PerformanceLogger(
+    "performance_log.csv",
+    interval_seconds=5,
+    model_name=MODEL_NAME,
+    input_size=INPUT_SIZE,
+)
+total_inference_count = 0
+inference_times_ms = []
+
 DEBUG = False  # True 时打印每帧状态，方便调参
 
 
 # 加载姿态模型
-model = ONNXPoseDetector("yolo11n-pose.onnx")
+model = ONNXPoseDetector(MODEL_NAME)
 fall_detector = FallDetector()
 
 
@@ -71,7 +84,9 @@ while True:
         inference_start = time.perf_counter()
         results = model(frame)
         inference_count += 1
+        total_inference_count += 1
         inference_time_ms = (time.perf_counter() - inference_start) * 1000
+        inference_times_ms.append(inference_time_ms)
 
         # 获取关键点
         keypoints_xy = results[0].keypoints.xy
@@ -129,6 +144,18 @@ while True:
         (0, 255, 0),
         2,
     )
+
+    # 每 5 秒保存一次性能数据，用于 LoongArch 平台 AI 推理性能测试。
+    current_time = time.perf_counter()
+    if performance_logger.should_log(current_time):
+        performance_logger.write(
+            FRAME_SKIP,
+            camera_fps,
+            ai_fps,
+            total_inference_count,
+            inference_times_ms,
+            current_time,
+        )
     cv2.putText(
         annotated_frame,
         f"Inference Time: {inference_time_ms:.1f} ms",
@@ -170,5 +197,8 @@ while True:
             break
 
 
-video.release()
-cv2.destroyAllWindows()
+try:
+    video.release()
+    cv2.destroyAllWindows()
+finally:
+    performance_logger.close()

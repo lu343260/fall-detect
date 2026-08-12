@@ -1,0 +1,5 @@
+timestamp,platform_system,platform_machine,platform_release,python_version,frame_skip,camera_fps,ai_fps,inference_count,avg_inference_time_ms,max_inference_time_ms,min_inference_time_ms,runtime_seconds
+2026-08-12T17:37:14,Windows,AMD64,10,3.11.9,1,21.73,21.85,62,34.02,291.57,28.36,5.03
+2026-08-12T17:37:19,Windows,AMD64,10,3.11.9,1,21.87,21.88,171,31.96,291.57,28.36,10.04
+2026-08-12T17:37:24,Windows,AMD64,10,3.11.9,1,21.84,21.93,280,31.32,291.57,27.09,15.05
+2026-08-12T17:37:29,Windows,AMD64,10,3.11.9,1,21.18,21.06,392,31.20,291.57,27.09,20.07
