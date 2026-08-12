@@ -29,7 +29,7 @@ SKELETON = [
 ]
 
 
-def letterbox(img: np.ndarray, new_shape=(IMGSZ, IMGSZ)):
+def letterbox(img: np.ndarray, new_shape):
     """Resize with padding and return the image plus scale/padding metadata."""
     height, width = img.shape[:2]
     ratio = min(new_shape[0] / height, new_shape[1] / width)
@@ -51,8 +51,8 @@ def letterbox(img: np.ndarray, new_shape=(IMGSZ, IMGSZ)):
     return padded, ratio, (dw, dh)
 
 
-def preprocess(frame: np.ndarray):
-    padded, ratio, padding = letterbox(frame)
+def preprocess(frame: np.ndarray, imgsz: int):
+    padded, ratio, padding = letterbox(frame, (imgsz, imgsz))
     blob = padded[..., ::-1].astype(np.float32) / 255.0
     blob = np.ascontiguousarray(blob.transpose(2, 0, 1))[None, ...]
     return blob, ratio, padding
@@ -93,11 +93,20 @@ def scale_boxes_and_keypoints(
     orig_shape,
     ratio: float,
     padding,
+    imgsz: int,
 ):
-    """Undo letterbox padding and map model coordinates to the camera frame."""
+    """Undo an ``imgsz`` square letterbox and map coordinates to the camera frame."""
+    if imgsz <= 0:
+        raise ValueError(f"imgsz must be positive, got {imgsz}")
     pad_x, pad_y = padding
     boxes = boxes.copy()
     keypoints = keypoints.copy()
+
+    # Model coordinates are expressed in the square input image. Clamp them
+    # before removing letterbox padding so this function stays tied to the
+    # detector instance's configured input size.
+    boxes[:, :4] = boxes[:, :4].clip(0, imgsz)
+    keypoints[:, :, :2] = keypoints[:, :, :2].clip(0, imgsz)
 
     boxes[:, [0, 2]] -= pad_x
     boxes[:, [1, 3]] -= pad_y
@@ -113,8 +122,8 @@ def scale_boxes_and_keypoints(
     return boxes, keypoints
 
 
-def postprocess(output, orig_shape, ratio, padding):
-    """Decode [1, 56, 8400] into boxes and (N, 17, 3) keypoints."""
+def postprocess(output, orig_shape, ratio, padding, imgsz: int):
+    """Decode the model output and map coordinates back to the camera frame."""
     prediction = np.asarray(output, dtype=np.float32)
     if prediction.ndim != 3 or prediction.shape[0] != 1:
         raise ValueError(f"Unexpected ONNX output shape: {prediction.shape}")
@@ -145,7 +154,7 @@ def postprocess(output, orig_shape, ratio, padding):
     keypoints = keypoints[keep]
     scores = scores[keep]
     boxes, keypoints = scale_boxes_and_keypoints(
-        boxes, keypoints, orig_shape, ratio, padding,
+        boxes, keypoints, orig_shape, ratio, padding, imgsz,
     )
     return boxes, keypoints, scores
 
@@ -187,7 +196,10 @@ class PoseResult:
 
 
 class ONNXPoseDetector:
-    def __init__(self, onnx_path: str = "yolo11n-pose.onnx"):
+    def __init__(self, onnx_path: str = "yolo11n-pose.onnx", imgsz: int = IMGSZ):
+        if not isinstance(imgsz, int) or imgsz <= 0:
+            raise ValueError(f"imgsz must be a positive integer, got {imgsz!r}")
+        self.imgsz = imgsz
         path = Path(onnx_path)
         if not path.is_absolute():
             path = Path(__file__).resolve().parent / path
@@ -198,13 +210,35 @@ class ONNXPoseDetector:
         self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
         self.output_name = self.net.getUnconnectedOutLayersNames()[0]
 
+        # OpenCV DNN does not expose the ONNX input metadata consistently across
+        # versions. The deployment package already depends on ONNX Runtime, so
+        # use it only to inspect and validate the model input shape at startup.
+        import onnxruntime as ort
+
+        metadata_session = ort.InferenceSession(
+            str(path), providers=["CPUExecutionProvider"]
+        )
+        input_meta = metadata_session.get_inputs()[0]
+        self.input_name = input_meta.name
+        self.input_shape = tuple(input_meta.shape)
+        expected_shape = (1, 3, self.imgsz, self.imgsz)
+        if self.input_shape != expected_shape:
+            raise ValueError(
+                f"ONNX input shape mismatch: model={self.input_shape}, "
+                f"configured={expected_shape}"
+            )
+        print(
+            f"[MODEL] path={path.name} input_name={self.input_name} "
+            f"input_shape={self.input_shape}"
+        )
+
     def __call__(self, frame: np.ndarray):
-        blob, ratio, padding = preprocess(frame)
+        blob, ratio, padding = preprocess(frame, self.imgsz)
         self.net.setInput(blob)
         start = time.time()
         output = self.net.forward(self.output_name)
         print(f"[DNN] forward time={(time.time() - start) * 1000:.2f} ms")
         boxes, keypoints, _ = postprocess(
-            output, frame.shape[:2], ratio, padding,
+            output, frame.shape[:2], ratio, padding, self.imgsz,
         )
         return [PoseResult(frame, boxes, keypoints)]

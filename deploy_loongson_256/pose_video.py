@@ -30,13 +30,13 @@ def main():
     args = parse_args()
     show_display = SHOW_DISPLAY and not args.no_display
     process_every = max(1, args.process_every)
-    model = ONNXPoseDetector("yolo11n-pose-256.onnx")
+    model = ONNXPoseDetector("yolo11n-pose-256.onnx", imgsz=onnx_inference.IMGSZ)
     print(
         f"[BOOT] loading yolo11n-pose-256.onnx "
-        f"(input {onnx_inference.IMGSZ}x{onnx_inference.IMGSZ})"
+        f"(configured input {model.imgsz}x{model.imgsz})"
     )
     print(
-        f"({onnx_inference.IMGSZ}x{onnx_inference.IMGSZ} model; "
+        f"(ONNX input shape {model.input_shape}; "
         "Ctrl-C to abort if too slow)"
     )
     fall_detector = FallDetector()
