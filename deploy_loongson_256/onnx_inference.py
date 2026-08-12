@@ -1,4 +1,4 @@
-"""Loongson deployment inference using ONNX Runtime only.
+"""Loongson deployment inference using OpenCV DNN.
 
 The public interface intentionally matches the current pose_video.py usage:
 ``model(frame)[0].keypoints.xy`` and ``.conf``.
@@ -210,27 +210,34 @@ class ONNXPoseDetector:
         self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
         self.output_name = self.net.getUnconnectedOutLayersNames()[0]
 
-        # OpenCV DNN does not expose the ONNX input metadata consistently across
-        # versions. The deployment package already depends on ONNX Runtime, so
-        # use it only to inspect and validate the model input shape at startup.
-        import onnxruntime as ort
-
-        metadata_session = ort.InferenceSession(
-            str(path), providers=["CPUExecutionProvider"]
-        )
-        input_meta = metadata_session.get_inputs()[0]
-        self.input_name = input_meta.name
-        self.input_shape = tuple(input_meta.shape)
-        expected_shape = (1, 3, self.imgsz, self.imgsz)
-        if self.input_shape != expected_shape:
-            raise ValueError(
-                f"ONNX input shape mismatch: model={self.input_shape}, "
-                f"configured={expected_shape}"
+        # OpenCV DNN remains the actual inference backend on LoongArch. The
+        # blob shape is the concrete shape passed to the ONNX network. ONNX
+        # Runtime is optional and is used only for metadata verification when
+        # it happens to be installed; it is never required for deployment.
+        self.input_shape = (1, 3, self.imgsz, self.imgsz)
+        self.input_name = None
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            pass
+        else:
+            metadata_session = ort.InferenceSession(
+                str(path), providers=["CPUExecutionProvider"]
             )
+            input_meta = metadata_session.get_inputs()[0]
+            self.input_name = input_meta.name
+            actual_shape = tuple(input_meta.shape)
+            if actual_shape != self.input_shape:
+                raise ValueError(
+                    f"ONNX input shape mismatch: model={actual_shape}, "
+                    f"configured={self.input_shape}"
+                )
         print(
-            f"[MODEL] path={path.name} input_name={self.input_name} "
+            f"[MODEL] path={path.name} backend=OpenCV-DNN "
             f"input_shape={self.input_shape}"
         )
+        if self.input_name is not None:
+            print(f"[MODEL] optional ONNX metadata input_name={self.input_name}")
 
     def __call__(self, frame: np.ndarray):
         blob, ratio, padding = preprocess(frame, self.imgsz)
