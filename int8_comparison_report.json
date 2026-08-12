@@ -1,0 +1,60 @@
+{
+  "evaluation_images": 60,
+  "paired_top_detections": 60,
+  "models": [
+    {
+      "model": "FP32",
+      "path": "yolo11n-pose-256.onnx",
+      "size_bytes": 11627437,
+      "size_mib": 11.088788032531738,
+      "inference_mean_ms": 5.398156662704423,
+      "inference_fps": 185.24842135630237
+    },
+    {
+      "model": "INT8",
+      "path": "yolo11n-pose-256-int8.onnx",
+      "size_bytes": 3252974,
+      "size_mib": 3.1022777557373047,
+      "inference_mean_ms": 6.538615003228188,
+      "inference_fps": 152.93758685995257
+    }
+  ],
+  "keypoint_consistency_top_detection": {
+    "nose": {
+      "images_with_both_detections": 60,
+      "coordinate_error_px": 1.2820636754855514,
+      "confidence_abs_delta": 0.0029642979303995767
+    },
+    "left_shoulder": {
+      "images_with_both_detections": 60,
+      "coordinate_error_px": 2.1028710206349692,
+      "confidence_abs_delta": 0.001745656132698059
+    },
+    "right_shoulder": {
+      "images_with_both_detections": 60,
+      "coordinate_error_px": 1.5233406784633796,
+      "confidence_abs_delta": 0.001312700907389323
+    },
+    "left_hip": {
+      "images_with_both_detections": 60,
+      "coordinate_error_px": 1.7394852379957835,
+      "confidence_abs_delta": 0.0035432825485865274
+    },
+    "right_hip": {
+      "images_with_both_detections": 60,
+      "coordinate_error_px": 1.9916917006174724,
+      "confidence_abs_delta": 0.003365674614906311
+    },
+    "left_knee": {
+      "images_with_both_detections": 60,
+      "coordinate_error_px": 2.2181996705631417,
+      "confidence_abs_delta": 0.019656476378440858
+    },
+    "right_knee": {
+      "images_with_both_detections": 60,
+      "coordinate_error_px": 2.6263770138223967,
+      "confidence_abs_delta": 0.016770739356676737
+    }
+  },
+  "note": "This is output consistency on one source image, not mAP. Use representative labelled fall data for final accuracy."
+}

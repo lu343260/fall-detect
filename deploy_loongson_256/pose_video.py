@@ -18,9 +18,25 @@ PERFORMANCE_LOG_INTERVAL_SECONDS = 5
 def parse_args():
     parser = argparse.ArgumentParser(description="ONNX pose fall detection camera")
     parser.add_argument("--camera", type=int, default=0, help="Camera device index")
+    parser.add_argument(
+        "--model", default="yolo11n-pose-256.onnx",
+        help="ONNX model filename/path, e.g. yolo11n-pose-256-int8.onnx",
+    )
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--process-every", type=int, default=3)
+    parser.add_argument(
+        "--dnn-threads", type=int, default=0,
+        help="OpenCV CPU threads; 0 lets OpenCV choose the default",
+    )
+    parser.add_argument(
+        "--dnn-backend", choices=sorted(onnx_inference.BACKENDS), default="opencv",
+        help="OpenCV DNN backend",
+    )
+    parser.add_argument(
+        "--dnn-target", choices=sorted(onnx_inference.TARGETS), default="cpu",
+        help="OpenCV DNN target",
+    )
     parser.add_argument("--no-rotate", action="store_true")
     parser.add_argument("--no-display", action="store_true")
     return parser.parse_args()
@@ -30,9 +46,15 @@ def main():
     args = parse_args()
     show_display = SHOW_DISPLAY and not args.no_display
     process_every = max(1, args.process_every)
-    model = ONNXPoseDetector("yolo11n-pose-256.onnx", imgsz=onnx_inference.IMGSZ)
+    model = ONNXPoseDetector(
+        args.model,
+        imgsz=onnx_inference.IMGSZ,
+        threads=args.dnn_threads,
+        backend=args.dnn_backend,
+        target=args.dnn_target,
+    )
     print(
-        f"[BOOT] loading yolo11n-pose-256.onnx "
+        f"[BOOT] loading {args.model} "
         f"(configured input {model.imgsz}x{model.imgsz})"
     )
     print(

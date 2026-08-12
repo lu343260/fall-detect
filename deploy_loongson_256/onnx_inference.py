@@ -29,6 +29,65 @@ SKELETON = [
 ]
 
 
+def _available_dnn_options(names):
+    return {
+        name: getattr(cv2.dnn, constant)
+        for name, constant in names.items()
+        if hasattr(cv2.dnn, constant)
+    }
+
+
+BACKENDS = _available_dnn_options({
+    "opencv": "DNN_BACKEND_OPENCV",
+    "halide": "DNN_BACKEND_HALIDE",
+    "inference_engine": "DNN_BACKEND_INFERENCE_ENGINE",
+    "cuda": "DNN_BACKEND_CUDA",
+    "vkcom": "DNN_BACKEND_VKCOM",
+})
+TARGETS = _available_dnn_options({
+    "cpu": "DNN_TARGET_CPU",
+    "opencl": "DNN_TARGET_OPENCL",
+    "opencl_fp16": "DNN_TARGET_OPENCL_FP16",
+    "myriad": "DNN_TARGET_MYRIAD",
+    "fpga": "DNN_TARGET_FPGA",
+    "cuda": "DNN_TARGET_CUDA",
+    "cuda_fp16": "DNN_TARGET_CUDA_FP16",
+    "vulkan": "DNN_TARGET_VULKAN",
+})
+
+
+def print_opencv_cpu_info():
+    """Print the build options that affect CPU DNN performance."""
+    lines = cv2.getBuildInformation().splitlines()
+    print("[OpenCV] CPU optimization information:")
+    in_cpu_section = False
+    printed = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(("CPU/HW features:", "CPU features:")):
+            in_cpu_section = True
+            print(f"[OpenCV] {stripped}")
+            printed = True
+        elif in_cpu_section and stripped:
+            print(f"[OpenCV] {stripped}")
+        elif in_cpu_section:
+            in_cpu_section = False
+        if stripped.startswith("Parallel framework:"):
+            print(f"[OpenCV] {stripped}")
+            printed = True
+    if not printed:
+        print("[OpenCV] CPU optimization information unavailable")
+
+
+def configure_dnn(threads: int, backend: str, target: str):
+    """Apply process-wide OpenCV threading and DNN execution settings."""
+    if threads < 0:
+        raise ValueError(f"threads must be >= 0, got {threads}")
+    cv2.setNumThreads(threads)
+    print(f"[DNN] threads={cv2.getNumThreads()} backend={backend} target={target}")
+    print_opencv_cpu_info()
+
+
 def letterbox(img: np.ndarray, new_shape):
     """Resize with padding and return the image plus scale/padding metadata."""
     height, width = img.shape[:2]
@@ -196,18 +255,30 @@ class PoseResult:
 
 
 class ONNXPoseDetector:
-    def __init__(self, onnx_path: str = "yolo11n-pose.onnx", imgsz: int = IMGSZ):
+    def __init__(
+        self,
+        onnx_path: str = "yolo11n-pose.onnx",
+        imgsz: int = IMGSZ,
+        threads: int = 0,
+        backend: str = "opencv",
+        target: str = "cpu",
+    ):
         if not isinstance(imgsz, int) or imgsz <= 0:
             raise ValueError(f"imgsz must be a positive integer, got {imgsz!r}")
+        if backend not in BACKENDS:
+            raise ValueError(f"unsupported DNN backend: {backend}")
+        if target not in TARGETS:
+            raise ValueError(f"unsupported DNN target: {target}")
         self.imgsz = imgsz
+        configure_dnn(threads, backend, target)
         path = Path(onnx_path)
         if not path.is_absolute():
             path = Path(__file__).resolve().parent / path
         if not path.exists():
             raise FileNotFoundError(f"ONNX model not found: {path.resolve()}")
         self.net = cv2.dnn.readNetFromONNX(str(path))
-        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        self.net.setPreferableBackend(BACKENDS[backend])
+        self.net.setPreferableTarget(TARGETS[target])
         self.output_name = self.net.getUnconnectedOutLayersNames()[0]
 
         # OpenCV DNN remains the actual inference backend on LoongArch. The
