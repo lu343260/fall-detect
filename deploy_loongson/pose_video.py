@@ -12,6 +12,7 @@ from onnx_inference import ONNXPoseDetector
 
 
 SHOW_DISPLAY = False  # Loongson headless environment: keep HighGUI disabled by default.
+PERFORMANCE_LOG_INTERVAL_SECONDS = 5
 
 
 def parse_args():
@@ -51,12 +52,19 @@ def main():
         cv2.resizeWindow("ONNX Pose", args.width, args.height)
 
     frame_count = 0
+    report_start_time = time.monotonic()
+    last_report_time = report_start_time
+    report_camera_frames = 0
+    report_inference_count = 0
+    report_inference_times_ms = []
+    report_state_skipped_frames = 0
     try:
         while True:
             ret, frame = video.read()
             if not ret:
                 break
             frame_count += 1
+            report_camera_frames += 1
             if not args.no_rotate:
                 frame = cv2.rotate(frame, cv2.ROTATE_180)
 
@@ -65,6 +73,9 @@ def main():
             infer_start = time.monotonic()
             results = model(frame)
             infer_time = time.monotonic() - infer_start
+            infer_time_ms = infer_time * 1000
+            report_inference_count += 1
+            report_inference_times_ms.append(infer_time_ms)
             result = results[0]
             keypoints_xy = result.keypoints.xy
             keypoints_conf = result.keypoints.conf
@@ -83,6 +94,8 @@ def main():
             detection = None
             if points_valid and frame_count % process_every == 0:
                 detection = fall_detector.detect(person, capture_time)
+            elif points_valid:
+                report_state_skipped_frames += 1
             detector_state = fall_detector.state
             state_object = detection.state if detection is not None else detector_state
             state = (
@@ -91,10 +104,32 @@ def main():
                 else state_object
             )
             fall = detection.fall if detection is not None else state in (1, 2)
-            print(
-                f"[INFER] persons={len(keypoints_xy)} "
-                f"time={infer_time:.3f}s state={state} fall={fall}"
-            )
+            now = time.monotonic()
+            report_elapsed = now - last_report_time
+            if report_elapsed >= PERFORMANCE_LOG_INTERVAL_SECONDS:
+                camera_fps = report_camera_frames / report_elapsed
+                inference_fps = report_inference_count / report_elapsed
+                average_infer_time_ms = (
+                    sum(report_inference_times_ms) / len(report_inference_times_ms)
+                    if report_inference_times_ms else 0.0
+                )
+                state_skip_ratio = report_state_skipped_frames / report_camera_frames
+                state_name = getattr(state_object, "name", str(state_object))
+                print(
+                    f"[PERF] runtime={now - report_start_time:.1f}s "
+                    f"camera_fps={camera_fps:.2f} "
+                    f"inference_fps={inference_fps:.2f} "
+                    f"inference_ms={infer_time_ms:.2f} "
+                    f"avg_inference_ms={average_infer_time_ms:.2f} "
+                    f"state={state_name} "
+                    f"state_skip_frames={report_state_skipped_frames} "
+                    f"state_skip_ratio={state_skip_ratio:.2%}"
+                )
+                last_report_time = now
+                report_camera_frames = 0
+                report_inference_count = 0
+                report_inference_times_ms.clear()
+                report_state_skipped_frames = 0
 
             if show_display:
                 cv2.imshow("ONNX Pose", annotated_frame)
