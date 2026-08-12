@@ -2,12 +2,19 @@ from onnx_inference import ONNXPoseDetector
 import cv2
 from fall_detector import FallDetector
 import time
+import platform
 from collections import deque
 from performance_logger import PerformanceLogger
 
-# 实验配置：修改这里即可切换模型、输入尺寸和固定跳帧参数。
-MODEL_NAME = "yolo11n-pose.onnx"
-INPUT_SIZE = 640
+# 根据运行平台自动选择模型和输入尺寸。
+PLATFORM_MACHINE = platform.machine().lower()
+if "loongarch" in PLATFORM_MACHINE:
+    MODEL_NAME = "yolo11n-pose-256.onnx"
+    INPUT_SIZE = 256
+else:
+    MODEL_NAME = "yolo11n-pose.onnx"
+    INPUT_SIZE = 640
+
 FRAME_SKIP = 1
 frame_count = 0
 camera_frame_times = deque(maxlen=30)
