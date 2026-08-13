@@ -1,8 +1,7 @@
-"""Benchmark OpenCV DNN FP32/INT8 model forward time only.
+"""Benchmark the deployed OpenCV DNN inference boundary.
 
-This benchmark excludes camera capture, preprocessing, postprocessing, drawing,
-and result handling. Only ``net.forward()`` is timed after a fixed input blob
-has been assigned with ``setInput``.
+Only ``setInput()`` and ``forward()`` are measured. Camera capture, image
+preprocessing, display, and postprocessing are intentionally excluded.
 """
 from __future__ import annotations
 
@@ -16,17 +15,17 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_FP32 = ROOT / "yolo11n-pose-256.onnx"
-DEFAULT_INT8 = ROOT / "yolo11n-pose-256-int8.onnx"
-INPUT_SHAPE = (1, 3, 256, 256)
+DEFAULT_MODEL = ROOT / "yolo11n-pose-256.onnx"
+DEFAULT_INPUT_SIZE = 256
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fp32", type=Path, default=DEFAULT_FP32)
-    parser.add_argument("--int8", type=Path, default=DEFAULT_INT8)
+    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--input-size", type=int, default=DEFAULT_INPUT_SIZE)
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
+    parser.add_argument("--threads", type=int, default=0)
     return parser.parse_args()
 
 
@@ -37,66 +36,108 @@ def resolve_model(path: Path) -> Path:
     return resolved
 
 
-def benchmark(path: Path, warmup: int, iterations: int):
-    net = cv2.dnn.readNetFromONNX(str(path))
+def summarize(samples_ms: list[float]) -> dict[str, float]:
+    values = np.asarray(samples_ms, dtype=np.float64)
+    return {
+        "average_ms": float(np.mean(values)),
+        "min_ms": float(np.min(values)),
+        "max_ms": float(np.max(values)),
+        "p50_ms": float(np.percentile(values, 50)),
+        "p95_ms": float(np.percentile(values, 95)),
+    }
+
+
+def benchmark(model_path: Path, input_size: int, warmup: int, iterations: int):
+    net = cv2.dnn.readNetFromONNX(str(model_path))
     net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
     net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
 
-    # Keep input preparation outside the timed region.
-    blob = np.zeros(INPUT_SHAPE, dtype=np.float32)
-    net.setInput(blob)
+    input_shape = (1, 3, input_size, input_size)
+    blob = np.zeros(input_shape, dtype=np.float32)
+
+    # Warmup includes both calls, matching the measured call sequence.
     for _ in range(warmup):
+        net.setInput(blob)
         net.forward()
 
-    elapsed_ms = []
+    set_input_ms: list[float] = []
+    forward_ms: list[float] = []
     output_shape = None
     for _ in range(iterations):
         start = time.perf_counter()
+        net.setInput(blob)
+        set_input_ms.append((time.perf_counter() - start) * 1000.0)
+
+        start = time.perf_counter()
         output = net.forward()
-        elapsed_ms.append((time.perf_counter() - start) * 1000.0)
+        forward_ms.append((time.perf_counter() - start) * 1000.0)
         output_shape = tuple(np.asarray(output).shape)
 
-    average_ms = float(np.mean(elapsed_ms))
+    set_stats = summarize(set_input_ms)
+    forward_stats = summarize(forward_ms)
+    total_ms = np.asarray(set_input_ms) + np.asarray(forward_ms)
+    total_stats = summarize(total_ms.tolist())
     return {
-        "path": str(path.resolve()),
-        "size_bytes": path.stat().st_size,
-        "average_forward_ms": average_ms,
-        "forward_fps": 1000.0 / average_ms if average_ms > 0 else 0.0,
+        "model_name": model_path.name,
+        "model_path": str(model_path.resolve()),
+        "input_size": f"{input_size}x{input_size}",
+        "input_shape": input_shape,
+        "inference_count": iterations,
+        "warmup_count": warmup,
+        "setInput": set_stats,
+        "forward": forward_stats,
+        "setInput_plus_forward": total_stats,
+        "theoretical_fps": 1000.0 / total_stats["average_ms"],
+        "forward_only_fps": 1000.0 / forward_stats["average_ms"],
         "output_shape": output_shape,
     }
 
 
+def print_stats(result: dict):
+    print(f"model_name: {result['model_name']}")
+    print(f"input_size: {result['input_size']} ({result['input_shape']})")
+    print(f"inference_count: {result['inference_count']}")
+    print(f"warmup_count: {result['warmup_count']}")
+    for name in ("setInput", "forward", "setInput_plus_forward"):
+        stats = result[name]
+    print(
+        f"{name}: average={stats['average_ms']:.3f} ms, "
+            f"min={stats['min_ms']:.3f} ms, max={stats['max_ms']:.3f} ms, "
+            f"P50={stats['p50_ms']:.3f} ms, P95={stats['p95_ms']:.3f} ms"
+        )
+    print(f"forward average: {result['forward']['average_ms']:.3f} ms")
+    print(f"FPS: {result['forward_only_fps']:.3f}")
+    print(f"theoretical_fps (setInput+forward): {result['theoretical_fps']:.3f}")
+    print(f"forward_only_fps: {result['forward_only_fps']:.3f}")
+    print(f"output_shape: {result['output_shape']}")
+
+
 def main() -> int:
     args = parse_args()
-    if args.warmup < 0 or args.iterations <= 0:
-        raise ValueError("--warmup must be >= 0 and --iterations must be > 0")
-
-    fp32_path = resolve_model(args.fp32)
-    int8_path = resolve_model(args.int8)
-    print(f"OpenCV version: {cv2.__version__}")
-    print(f"Platform: {platform.machine()} (expected LoongArch64)")
-    print("Backend: OpenCV DNN")
-    print("Target: CPU")
-    print(f"Input shape: {INPUT_SHAPE}")
-    print(f"Warmup: {args.warmup}, iterations: {args.iterations}")
-    print("Timing scope: net.forward() only")
-
-    results = {}
-    for name, path in (("FP32", fp32_path), ("INT8", int8_path)):
-        result = benchmark(path, args.warmup, args.iterations)
-        results[name] = result
-        print(
-            f"{name}: average_forward={result['average_forward_ms']:.3f} ms, "
-            f"forward_FPS={result['forward_fps']:.3f}, "
-            f"output_shape={result['output_shape']}"
+    if (
+        args.input_size <= 0
+        or args.warmup < 0
+        or args.iterations <= 0
+        or args.threads < 0
+    ):
+        raise ValueError(
+            "input-size must be > 0, warmup >= 0, iterations > 0, threads >= 0"
         )
 
-    fp32_ms = results["FP32"]["average_forward_ms"]
-    int8_ms = results["INT8"]["average_forward_ms"]
-    speedup = fp32_ms / int8_ms if int8_ms > 0 else 0.0
-    change_percent = ((fp32_ms - int8_ms) / fp32_ms * 100.0) if fp32_ms > 0 else 0.0
-    print(f"INT8 speedup ratio: {speedup:.3f}x")
-    print(f"INT8 forward time change: {change_percent:+.2f}%")
+    if args.threads != 0:
+        cv2.setNumThreads(args.threads)
+
+    model_path = resolve_model(args.model)
+    print(f"OpenCV version: {cv2.__version__}")
+    print(f"Platform: {platform.machine()} (expected LoongArch64 on target)")
+    print(
+        "OpenCV threads: "
+        f"{args.threads if args.threads != 0 else 'default'}"
+    )
+    print("Backend: OpenCV DNN / Target: CPU")
+    print("Timing scope: setInput() and forward() only")
+    print("Input blob: fixed FP32 zeros; creation is outside timing")
+    print_stats(benchmark(model_path, args.input_size, args.warmup, args.iterations))
     return 0
 
 
