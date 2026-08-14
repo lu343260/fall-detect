@@ -444,3 +444,53 @@ Platform:
 ```
 
 以上数据作为后续模型、算子和系统架构优化的对照基线。不同测试批次可能受预热、摄像头、日志、系统负载和具体模型文件影响，正式对比应在相同脚本、相同输入和相同运行时配置下重复测量。
+
+## ONNX Runtime后端优化实验
+
+### 实验目的
+
+比较 OpenCV DNN 和 ONNX Runtime 在 LoongArch CPU 上的推理性能，验证更换推理后端对固定模型和固定输入尺寸的优化收益。
+
+### 实验配置
+
+| 项目 | 配置 |
+|---|---|
+| 模型 | `yolo11n-pose-256.onnx` |
+| 输入 | `256×256`，FP32 |
+| 设备 | CPU |
+| 平台 | LoongArch64 龙芯平台 |
+| OpenCV | 4.10 |
+| ONNX Runtime | 1.17.1 |
+| ONNX Runtime provider | `CPUExecutionProvider` |
+| benchmark | warmup 20，iterations 100 |
+
+正式 benchmark 使用 `deploy_loongson_256/benchmark_onnxruntime.py`，结果保存为：
+
+```text
+benchmark/results/backend_compare.csv
+```
+
+CSV 字段为：
+
+```text
+backend,model_name,input_size,avg_inference_time_ms,fps,speedup_percent
+```
+
+### 当前已完成结果
+
+当前已知快速测试结果如下。该组数据用于记录已观察到的后端差异；正式 20 次 warmup、100 次 iterations 的最终数值应以目标板重新执行脚本生成的 CSV 为准。
+
+| 后端 | 平均推理时间（ms） | FPS | 延迟降低 |
+|---|---:|---:|---:|
+| OpenCV DNN | 4196.450 | 0.238 | 0.000% |
+| ONNX Runtime CPUExecutionProvider | 3451.525 | 0.290 | 17.751% |
+
+以平均推理时间计算，ONNX Runtime 相比 OpenCV DNN 延迟降低约 **17.751%**；按未四舍五入的时间换算 FPS，FPS 提升约 **21.582%**。
+
+### 分析
+
+- ONNX Runtime `CPUExecutionProvider` 相比 OpenCV DNN 降低了固定模型的推理延迟；
+- 该优化属于针对 LoongArch 平台的推理后端优化；
+- 优化不改变模型文件、输入尺寸和跌倒检测算法；
+- 优化不修改 `pose_video.py`、`FallDetector` 或现有推理接口；
+- 后续应以同一脚本完成正式 20/100 配置的重复测量，并结合系统负载记录结果波动。

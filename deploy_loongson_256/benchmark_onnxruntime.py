@@ -1,4 +1,4 @@
-"""Compare OpenCV DNN and ONNX Runtime CPU forward latency."""
+"""Compare OpenCV DNN and ONNX Runtime CPU inference latency."""
 from __future__ import annotations
 
 import argparse
@@ -15,15 +15,22 @@ ROOT = Path(__file__).resolve().parent
 MODEL_PATH = ROOT / "yolo11n-pose-256.onnx"
 INPUT_SIZE = 256
 INPUT_SHAPE = (1, 3, INPUT_SIZE, INPUT_SIZE)
-RESULT_PATH = ROOT / "benchmark" / "results" / "opencv_onnxruntime_benchmark.csv"
-CSV_FIELDS = ("backend", "avg_forward_ms", "fps")
+RESULT_PATH = ROOT / "benchmark" / "results" / "backend_compare.csv"
+CSV_FIELDS = (
+    "backend",
+    "model_name",
+    "input_size",
+    "avg_inference_time_ms",
+    "fps",
+    "speedup_percent",
+)
+ORT_PROVIDER = "CPUExecutionProvider"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
-    parser.add_argument("--output", type=Path, default=RESULT_PATH)
     return parser.parse_args()
 
 
@@ -62,7 +69,7 @@ def benchmark_opencv(blob: np.ndarray, warmup: int, iterations: int) -> float:
     return float(np.mean(samples_ms))
 
 
-def benchmark_onnxruntime(blob: np.ndarray, warmup: int, iterations: int) -> float:
+def load_onnxruntime():
     try:
         import onnxruntime as ort
     except ImportError as exc:
@@ -70,10 +77,26 @@ def benchmark_onnxruntime(blob: np.ndarray, warmup: int, iterations: int) -> flo
             "ONNX Runtime is required for this benchmark. Install a "
             "LoongArch-compatible onnxruntime build on the target system."
         ) from exc
+    return ort
+
+
+def benchmark_onnxruntime(
+    ort, blob: np.ndarray, warmup: int, iterations: int
+) -> float:
+    if ORT_PROVIDER not in ort.get_available_providers():
+        raise RuntimeError(
+            f"{ORT_PROVIDER} is not available; providers="
+            f"{ort.get_available_providers()}"
+        )
 
     session = ort.InferenceSession(
-        str(MODEL_PATH), providers=["CPUExecutionProvider"]
+        str(MODEL_PATH), providers=[ORT_PROVIDER]
     )
+    if ORT_PROVIDER not in session.get_providers():
+        raise RuntimeError(
+            f"requested provider {ORT_PROVIDER} was not selected; "
+            f"session providers={session.get_providers()}"
+        )
     input_meta = session.get_inputs()[0]
     actual_shape = tuple(input_meta.shape)
     if actual_shape != INPUT_SHAPE:
@@ -87,11 +110,14 @@ def benchmark_onnxruntime(blob: np.ndarray, warmup: int, iterations: int) -> flo
     return average_forward_ms(forward, blob, warmup, iterations)
 
 
-def make_row(backend: str, avg_forward_ms: float) -> dict[str, str]:
+def make_row(backend: str, avg_inference_time_ms: float) -> dict[str, str]:
     return {
         "backend": backend,
-        "avg_forward_ms": f"{avg_forward_ms:.3f}",
-        "fps": f"{1000.0 / avg_forward_ms:.3f}",
+        "model_name": MODEL_PATH.name,
+        "input_size": f"{INPUT_SIZE}x{INPUT_SIZE}",
+        "avg_inference_time_ms": f"{avg_inference_time_ms:.3f}",
+        "fps": f"{1000.0 / avg_inference_time_ms:.3f}",
+        "speedup_percent": "0.000",
     }
 
 
@@ -109,12 +135,16 @@ def main() -> int:
     if not MODEL_PATH.exists():
         raise FileNotFoundError(f"model not found: {MODEL_PATH}")
 
+    ort = load_onnxruntime()
+
     # One fixed FP32 input keeps preprocessing and allocation outside timing.
     blob = np.zeros(INPUT_SHAPE, dtype=np.float32)
-    output_path = args.output if args.output.is_absolute() else ROOT / args.output
+    output_path = RESULT_PATH
     print(f"model: {MODEL_PATH.name}")
     print(f"input: {INPUT_SIZE}x{INPUT_SIZE}, CPU, {platform.machine()}")
     print(f"warmup: {args.warmup}, iterations: {args.iterations}")
+    print(f"onnxruntime version: {ort.__version__}")
+    print(f"execution provider: {ORT_PROVIDER}")
 
     rows = []
     opencv_row = make_row(
@@ -123,14 +153,15 @@ def main() -> int:
     )
     rows.append(opencv_row)
     print(
-        f"{opencv_row['backend']}: avg_forward_ms={opencv_row['avg_forward_ms']}, "
+        f"{opencv_row['backend']}: "
+        f"avg_inference_time_ms={opencv_row['avg_inference_time_ms']}, "
         f"fps={opencv_row['fps']}"
     )
 
     try:
         ort_row = make_row(
             "ONNX Runtime CPUExecutionProvider",
-            benchmark_onnxruntime(blob, args.warmup, args.iterations),
+            benchmark_onnxruntime(ort, blob, args.warmup, args.iterations),
         )
     except RuntimeError as exc:
         write_results(output_path, rows)
@@ -141,12 +172,26 @@ def main() -> int:
         )
         return 2
 
+    opencv_time_ms = float(opencv_row["avg_inference_time_ms"])
+    ort_time_ms = float(ort_row["avg_inference_time_ms"])
+    latency_reduction_percent = (
+        (opencv_time_ms - ort_time_ms) / opencv_time_ms * 100.0
+    )
+    fps_increase_percent = (
+        (float(ort_row["fps"]) - float(opencv_row["fps"]))
+        / float(opencv_row["fps"])
+        * 100.0
+    )
+    ort_row["speedup_percent"] = f"{latency_reduction_percent:.3f}"
     rows.append(ort_row)
     print(
-        f"{ort_row['backend']}: avg_forward_ms={ort_row['avg_forward_ms']}, "
+        f"{ort_row['backend']}: "
+        f"avg_inference_time_ms={ort_row['avg_inference_time_ms']}, "
         f"fps={ort_row['fps']}"
     )
     write_results(output_path, rows)
+    print(f"latency reduction: {latency_reduction_percent:.3f}%")
+    print(f"FPS increase: {fps_increase_percent:.3f}%")
     print(f"saved: {output_path.resolve()}")
     return 0
 

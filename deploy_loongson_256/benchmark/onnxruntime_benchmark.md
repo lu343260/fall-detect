@@ -13,14 +13,18 @@ benchmark 固定使用：
 - 设备：CPU
 - 后端：OpenCV DNN、ONNX Runtime `CPUExecutionProvider`
 
-输出文件默认为 `benchmark/results/opencv_onnxruntime_benchmark.csv`，字段为：
+输出文件固定为 `benchmark/results/backend_compare.csv`，字段为：
 
 ```text
-backend,avg_forward_ms,fps
+backend,model_name,input_size,avg_inference_time_ms,fps,speedup_percent
 ```
 
+完整结果还会增加 `speedup_percent`：OpenCV DNN 行为 `0`，ONNX Runtime
+行按 OpenCV DNN 为基线计算延迟降低比例。程序同时打印延迟降低百分比和
+FPS 提升百分比。
+
 计时不包含模型加载、输入创建和 warmup。OpenCV 的 `setInput()` 也不计入
-`avg_forward_ms`，与现有 OpenCV forward benchmark 保持一致。
+`avg_inference_time_ms`，与现有 OpenCV forward benchmark 保持一致。
 
 LoongArch Linux 上需要预先安装或提供可用的 LoongArch-compatible
 `onnxruntime` 构建；它是 benchmark 的可选依赖，不加入部署运行时
@@ -41,6 +45,5 @@ python3 -c "import onnxruntime as ort; print(ort.__version__); print(ort.get_ava
 可调整采样次数，但不会改变模型、输入尺寸或执行设备：
 
 ```bash
-python3 benchmark_onnxruntime.py --warmup 20 --iterations 100 \
-  --output benchmark/results/opencv_onnxruntime_benchmark.csv
+python3 benchmark_onnxruntime.py --warmup 20 --iterations 100
 ```
