@@ -22,8 +22,24 @@ Useful options:
 ```bash
 python3 pose_video.py --camera 0 --no-rotate
 python3 pose_video.py --camera 0 --no-display
-python3 pose_video.py --camera 0 --process-every 3
+python3 pose_video.py --camera 0 --frame-skip 2 --no-display
 ```
+
+`--frame-skip N` keeps reading every camera frame but runs YOLO only once every
+N frames. Skipped frames reuse the latest pose result; the existing
+`FallDetector` update condition is unchanged. Runtime statistics are appended to
+`performance_log.csv`.
+
+Real camera/video frame-skip benchmark (runs `1`, `2`, `5`, and `10`):
+
+```bash
+python3 benchmark_frame_skip.py --source 0 --duration 30 \
+  --output benchmark/results/frame_skip_benchmark.csv
+```
+
+Use a video file instead of `--source 0` for repeatable tests. The CSV contains
+model name, input size, frame skip, total frames, inference count, average
+inference time, camera FPS, AI FPS, and the final fall-detection result.
 
 Pure OpenCV DNN inference-boundary benchmark (no camera, preprocessing,
 postprocessing, or drawing):

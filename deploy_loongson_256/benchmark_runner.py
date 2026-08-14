@@ -1,9 +1,8 @@
-"""Run the OpenCV DNN benchmark for a set of thread configurations."""
+"""Run the OpenCV DNN forward benchmark for 1, 2, 4, and 8 threads."""
 from __future__ import annotations
 
 import argparse
 import csv
-from datetime import datetime, timezone
 from multiprocessing import get_context
 from pathlib import Path
 
@@ -13,18 +12,11 @@ import benchmark_opencv_forward as benchmark_module
 
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_THREADS = (0, 1, 2, 4, 8, 12)
+DEFAULT_THREADS = (1, 2, 4, 8)
 RESULTS_DIR = ROOT / "benchmark" / "results"
-RESULTS_FILE = RESULTS_DIR / "benchmark_result.csv"
+RESULTS_FILE = RESULTS_DIR / "opencv_thread_benchmark.csv"
 CSV_FIELDS = (
-    "model_name",
-    "input_size",
-    "thread_num",
-    "avg_latency",
-    "min_latency",
-    "max_latency",
-    "fps",
-    "timestamp",
+    "thread_count", "avg_forward_ms", "fps",
 )
 
 
@@ -47,7 +39,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         nargs="+",
         default=list(DEFAULT_THREADS),
-        help="thread configurations to test (default: 0 1 2 4 8 12)",
+        help="thread configurations to test (default: 1 2 4 8)",
     )
     parser.add_argument(
         "--output",
@@ -106,16 +98,11 @@ def run_one(model_path: Path, args: argparse.Namespace, thread_num: int) -> dict
             f"(exit code {process.exitcode})"
         )
     result = result_queue.get()
-    total_stats = result["setInput_plus_forward"]
+    forward_stats = result["forward"]
     return {
-        "model_name": result["model_name"],
-        "input_size": result["input_size"],
-        "thread_num": thread_num,
-        "avg_latency": f"{total_stats['average_ms']:.3f}",
-        "min_latency": f"{total_stats['min_ms']:.3f}",
-        "max_latency": f"{total_stats['max_ms']:.3f}",
-        "fps": f"{result['theoretical_fps']:.3f}",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "thread_count": thread_num,
+        "avg_forward_ms": f"{forward_stats['average_ms']:.3f}",
+        "fps": f"{result['forward_only_fps']:.3f}",
     }
 
 
@@ -135,7 +122,7 @@ def main() -> int:
             row = run_one(model_path, args, thread_num)
             rows.append(row)
             print(
-                f"  average={row['avg_latency']} ms, FPS={row['fps']}"
+                f"  forward average={row['avg_forward_ms']} ms, FPS={row['fps']}"
             )
 
     with output_path.open("w", newline="", encoding="utf-8") as csv_file:

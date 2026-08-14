@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import argparse
 import time
+from collections import deque
 
 import cv2
 
 from fall_detector import FallDetector
 import onnx_inference
 from onnx_inference import ONNXPoseDetector
+from performance_logger import PerformanceLogger
 
 
 SHOW_DISPLAY = False  # Loongson headless environment: keep HighGUI disabled by default.
@@ -24,7 +26,14 @@ def parse_args():
     )
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
-    parser.add_argument("--process-every", type=int, default=3)
+    parser.add_argument(
+        "--frame-skip", type=int, default=1,
+        help="run YOLO once every N camera frames",
+    )
+    parser.add_argument(
+        "--process-every", dest="frame_skip_compat", type=int,
+        help="deprecated alias for --frame-skip",
+    )
     parser.add_argument(
         "--dnn-threads", type=int, default=0,
         help="OpenCV CPU threads; 0 lets OpenCV choose the default",
@@ -45,7 +54,8 @@ def parse_args():
 def main():
     args = parse_args()
     show_display = SHOW_DISPLAY and not args.no_display
-    process_every = max(1, args.process_every)
+    frame_skip = args.frame_skip_compat or args.frame_skip
+    frame_skip = max(1, frame_skip)
     model = ONNXPoseDetector(
         args.model,
         imgsz=onnx_inference.IMGSZ,
@@ -79,7 +89,20 @@ def main():
     report_camera_frames = 0
     report_inference_count = 0
     report_inference_times_ms = []
-    report_state_skipped_frames = 0
+    total_inference_count = 0
+    inference_times_ms = []
+    camera_frame_times = deque(maxlen=30)
+    camera_fps = 0.0
+    ai_fps = 0.0
+    last_result = None
+    last_person = None
+    last_pose_result = None
+    performance_logger = PerformanceLogger(
+        "performance_log.csv",
+        interval_seconds=PERFORMANCE_LOG_INTERVAL_SECONDS,
+        model_name=args.model,
+        input_size=model.imgsz,
+    )
     try:
         while True:
             ret, frame = video.read()
@@ -87,37 +110,47 @@ def main():
                 break
             frame_count += 1
             report_camera_frames += 1
+            camera_frame_times.append(time.perf_counter())
+            if len(camera_frame_times) >= 2:
+                span = camera_frame_times[-1] - camera_frame_times[0]
+                if span > 0:
+                    camera_fps = (len(camera_frame_times) - 1) / span
             if not args.no_rotate:
                 frame = cv2.rotate(frame, cv2.ROTATE_180)
 
             capture_time = time.monotonic()
             annotated_frame = frame.copy()
-            infer_start = time.monotonic()
-            results = model(frame)
-            infer_time = time.monotonic() - infer_start
-            infer_time_ms = infer_time * 1000
-            report_inference_count += 1
-            report_inference_times_ms.append(infer_time_ms)
-            result = results[0]
-            keypoints_xy = result.keypoints.xy
-            keypoints_conf = result.keypoints.conf
+            infer_time_ms = 0.0
+            detection = last_result
+            if frame_count % frame_skip == 0:
+                infer_start = time.perf_counter()
+                results = model(frame)
+                infer_time_ms = (time.perf_counter() - infer_start) * 1000
+                report_inference_count += 1
+                total_inference_count += 1
+                report_inference_times_ms.append(infer_time_ms)
+                inference_times_ms.append(infer_time_ms)
+                result = results[0]
+                last_pose_result = result
+                keypoints_xy = result.keypoints.xy
+                keypoints_conf = result.keypoints.conf
 
-            if len(keypoints_xy) > 0:
-                if show_display:
-                    annotated_frame = result.plot()
-                person = keypoints_xy[0]
-                confidence = keypoints_conf[0]
-                required_points = [5, 6, 11, 12]
-                points_valid = all(confidence[i] >= 0.5 for i in required_points)
-            else:
-                person = None
-                points_valid = False
+                if len(keypoints_xy) > 0:
+                    if show_display:
+                        annotated_frame = result.plot()
+                    last_person = keypoints_xy[0]
+                    confidence = keypoints_conf[0]
+                    required_points = [5, 6, 11, 12]
+                    points_valid = all(confidence[i] >= 0.5 for i in required_points)
+                else:
+                    last_person = None
+                    points_valid = False
 
-            detection = None
-            if points_valid and frame_count % process_every == 0:
-                detection = fall_detector.detect(person, capture_time)
-            elif points_valid:
-                report_state_skipped_frames += 1
+                if points_valid and frame_count % 3 == 0:
+                    detection = fall_detector.detect(last_person, capture_time)
+                    last_result = detection
+            elif show_display and last_pose_result is not None:
+                annotated_frame = last_pose_result.plot()
             detector_state = fall_detector.state
             state_object = detection.state if detection is not None else detector_state
             state = (
@@ -135,7 +168,6 @@ def main():
                     sum(report_inference_times_ms) / len(report_inference_times_ms)
                     if report_inference_times_ms else 0.0
                 )
-                state_skip_ratio = report_state_skipped_frames / report_camera_frames
                 state_name = getattr(state_object, "name", str(state_object))
                 print(
                     f"[PERF] runtime={now - report_start_time:.1f}s "
@@ -143,15 +175,19 @@ def main():
                     f"inference_fps={inference_fps:.2f} "
                     f"inference_ms={infer_time_ms:.2f} "
                     f"avg_inference_ms={average_infer_time_ms:.2f} "
-                    f"state={state_name} "
-                    f"state_skip_frames={report_state_skipped_frames} "
-                    f"state_skip_ratio={state_skip_ratio:.2%}"
+                    f"state={state_name}"
+                )
+                ai_fps = report_inference_count / report_elapsed
+                performance_logger.write(
+                    frame_skip, camera_fps, ai_fps, total_inference_count,
+                    inference_times_ms, time.perf_counter(),
+                    total_frames=frame_count,
+                    fall_detection_result=state_name,
                 )
                 last_report_time = now
                 report_camera_frames = 0
                 report_inference_count = 0
                 report_inference_times_ms.clear()
-                report_state_skipped_frames = 0
 
             if show_display:
                 cv2.imshow("ONNX Pose", annotated_frame)
@@ -159,6 +195,7 @@ def main():
                     break
     finally:
         video.release()
+        performance_logger.close()
         if show_display:
             cv2.destroyAllWindows()
 
