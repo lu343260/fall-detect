@@ -62,3 +62,17 @@ python3 pose_video.py --camera 0 --model yolo11n-pose-256-int8.onnx
 | 推理 FPS | `inference_fps` | `inference_fps` | `(INT8-FP32)/FP32` |
 
 关键点一致性直接查看 `keypoint_consistency_top_detection`。若 INT8 在关键点或置信度上出现明显偏差，应增加真实校准图片数量并覆盖不同光照、姿态、距离和遮挡情况后重新量化。
+
+## 5. FD-004 执行记录
+
+2026-08-25 在 Windows/AMD64 工作区执行了目标板验证前置检查。4 个 benchmark/支持检查脚本通过 Python 3.12.13 静态编译，但当前运行时未安装 `cv2`，且会话没有龙芯 2K0300 目标板或兼容的 LoongArch ONNX Runtime，因此没有生成新的性能 CSV。
+
+本次结果不能替代目标板结论。待目标板环境就绪后，应在相同 256×256 输入、`warmup=20`、`iterations=100`、线程配置和计时口径下，依次运行：
+
+```bash
+python3 test_opencv_int8_support.py --model yolo11n-pose-256-int8.onnx
+python3 benchmark_opencv_int8.py --model yolo11n-pose-256.onnx --int8-model yolo11n-pose-256-int8.onnx --warmup 20 --iterations 100 --threads 2
+python3 benchmark_onnxruntime.py --warmup 20 --iterations 100
+```
+
+在目标板验证完成前，INT8 只能表述为模型大小/有限图片输出对比已完成，不能表述为已获得推理加速。
