@@ -155,3 +155,9 @@ python evaluate_scenario_set.py `
 - `summary.json`：整体及按场景汇总、运行参数、模型 SHA-256 和延迟统计。
 
 可用 `--alarm-match-window` 调整事件级报警匹配窗口，使用 `--max-frames` 做小规模冒烟运行。实际结果必须记录模型、平台、输入尺寸、后端、阈值配置和输出路径。
+
+Phase 1 一致性要求：评估器应先对每个读取帧执行与正式入口一致的 180° 旋转；按 `--frame-skip` 决定是否执行推理，并仅在推理帧且帧号为 3 的倍数时更新状态机。跳过推理、无人或必要关键点无效时，应保留上一条有效预测状态，不触发恢复判断。
+
+## FD-008 数据集模板说明
+
+第一版数据集目录为 `datasets/fall_eval_v1/`，其清单字段为 `sample_id,video_path,scene_type,fps,duration,person_id`，事件标签字段为 `sample_id,start_time,end_time,expected_alarm`。当前空模板只用于结构检查；真实样本和标签补齐前，不能用于生成有效检测指标。

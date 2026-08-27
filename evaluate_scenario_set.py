@@ -22,6 +22,7 @@ from typing import Any
 
 REQUIRED_POINTS = (5, 6, 11, 12)
 TRUE_VALUES = {"1", "true", "yes", "y", "alarm", "fall", "fallen"}
+STATE_UPDATE_INTERVAL = 3
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Optional per-video frame limit for a smoke test.",
+    )
+    parser.add_argument(
+        "--frame-skip",
+        type=int,
+        default=1,
+        help="Run inference every Nth captured frame, matching deployment FRAME_SKIP (default: 1).",
     )
     return parser.parse_args()
 
@@ -189,7 +196,10 @@ def evaluate_video(
     confidence_threshold: float,
     alarm_match_window: float,
     max_frames: int | None,
+    frame_skip: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if frame_skip < 1:
+        raise ValueError("frame_skip must be >= 1")
     sample_id = first_value(row, ("sample_id", "id"))
     scene = first_value(row, ("scene", "category"), "unknown")
     media_path = resolve_media_path(DATASET, row)
@@ -218,6 +228,7 @@ def evaluate_video(
     alarm_time = None
     recovery_time = None
     previous_fall = False
+    last_result = None
     frame_rows = []
     error = ""
 
@@ -226,45 +237,63 @@ def evaluate_video(
             ok, frame = capture.read()
             if not ok:
                 break
-            timestamp = frame_index / fps
-            frame_index += 1
+            capture_frame_number = frame_index + 1
+            timestamp = (capture_frame_number - 1) / fps
+            frame_index = capture_frame_number
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
             result = None
             missing_names: list[int] = []
-            try:
-                pose_results = detector(frame)
-                xy = pose_results[0].keypoints.xy
-                conf = pose_results[0].keypoints.conf
-                if len(xy) == 0:
-                    no_person_frames += 1
-                else:
-                    person_frames += 1
-                    person_conf = conf[0]
-                    missing_names = [
-                        index for index, value in enumerate(person_conf)
-                        if float(value) < confidence_threshold
-                    ]
-                    missing_keypoint_count += len(missing_names)
-                    if any(person_conf[index] < confidence_threshold for index in REQUIRED_POINTS):
-                        missing_frame_count += 1
+            inference_run = (
+                capture_frame_number % frame_skip == 0
+            )
+            state_update = (
+                inference_run
+                and capture_frame_number % STATE_UPDATE_INTERVAL == 0
+            )
+            if inference_run:
+                try:
+                    pose_results = detector(frame)
+                    xy = pose_results[0].keypoints.xy
+                    conf = pose_results[0].keypoints.conf
+                    if len(xy) == 0:
+                        no_person_frames += 1
                     else:
-                        result = fall_detector.detect(xy[0], timestamp)
-            except Exception as exc:  # retain per-video diagnostic output
-                error = f"inference failed at frame {frame_index}: {exc}"
-                break
+                        person_frames += 1
+                        person_conf = conf[0]
+                        missing_names = [
+                            index for index, value in enumerate(person_conf)
+                            if float(value) < confidence_threshold
+                        ]
+                        missing_keypoint_count += len(missing_names)
+                        if any(person_conf[index] < confidence_threshold for index in REQUIRED_POINTS):
+                            missing_frame_count += 1
+                        elif state_update:
+                            result = fall_detector.detect(xy[0], timestamp)
+                except Exception as exc:  # retain per-video diagnostic output
+                    error = f"inference failed at frame {frame_index}: {exc}"
+                    break
 
-            fall = bool(result.fall) if result is not None else False
-            if fall and alarm_time is None:
-                alarm_time = timestamp
-            if previous_fall and not fall and alarm_time is not None and recovery_time is None:
-                recovery_time = timestamp
-            previous_fall = fall
+            # Deployment keeps last_result when a frame is skipped or invalid.
+            if result is not None:
+                fall = bool(result.fall)
+                if fall and alarm_time is None:
+                    alarm_time = timestamp
+                if previous_fall and not fall and alarm_time is not None and recovery_time is None:
+                    recovery_time = timestamp
+                previous_fall = fall
+                last_result = result
+            else:
+                fall = bool(last_result.fall) if last_result is not None else False
+            displayed_result = result if result is not None else last_result
             frame_rows.append(
                 {
                     "sample_id": sample_id,
-                    "frame_index": frame_index - 1,
+                    "frame_index": capture_frame_number - 1,
                     "time_s": round(timestamp, 6),
-                    "state": result.state if result is not None else "NO_VALID_POSE",
+                    "state": displayed_result.state if displayed_result is not None else "NO_VALID_POSE",
                     "fall": int(fall),
+                    "inference_run": int(inference_run),
+                    "state_update": int(result is not None),
                     "missing_keypoints": ";".join(map(str, missing_names)),
                     "missing_keypoint_count": len(missing_names),
                 }
@@ -401,6 +430,7 @@ def main() -> int:
             args.confidence_threshold,
             args.alarm_match_window,
             args.max_frames,
+            args.frame_skip,
         )
         video_rows.append(result)
         frame_rows.extend(frames)
@@ -425,7 +455,17 @@ def main() -> int:
     write_csv(
         output / "frame_predictions.csv",
         frame_rows,
-        ["sample_id", "frame_index", "time_s", "state", "fall", "missing_keypoints", "missing_keypoint_count"],
+        [
+            "sample_id",
+            "frame_index",
+            "time_s",
+            "state",
+            "fall",
+            "inference_run",
+            "state_update",
+            "missing_keypoints",
+            "missing_keypoint_count",
+        ],
     )
     (output / "summary.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"run_id": run_id, "output": str(output), "summary": summary["ALL"]}, ensure_ascii=False, indent=2))

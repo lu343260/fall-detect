@@ -1,13 +1,13 @@
 # FD-007：修复场景评估器与正式部署流程的一致性
 
-- **状态**：`READY`
+- **状态**：`RUNNING`
 - **优先级**：P1
 - **负责人**：待分配
 - **创建日期**：2026-08-27
 - **依赖任务**：FD-002
 - **执行环境**：Windows/AMD64 离线评估环境；Loongson 2K0300 / LoongArch64 部署验证环境
 - **阻塞原因**：Phase 1、Phase 2 可在 PC 先行；Phase 3 的 `realtime` 模式和目标板等价验证需要正式部署环境。
-- **下一步动作**：先完成 Phase 1 的帧处理和状态机调用一致性修复，再补齐输入、标签和时间模式接口。
+- **下一步动作**：Phase 1 已完成；后续另行评估是否启动 Phase 2 的输入尺寸和标签完整性工作。
 - **最后更新时间**：2026-08-27
 
 ## 任务背景
@@ -71,6 +71,8 @@ FD-002 已完成场景评估框架和初版自动评估入口 `evaluate_scenario
 ## 需要更新的文档
 
 - `docs/testing/scenario_evaluation_set.md`：补充一致性模式、输入旋转和标签完整性要求。
+- `docs/testing/FD-007-phase1-validation.md`：记录 Phase 1 修改前后对照和回归验证方案。
+- `docs/testing/reports/FD-007-phase1-validation-2026-08-27.md`：记录本次 baseline/Phase 1 双版本验证结果。
 - `docs/testing/test_record.md`：记录评估模式和一致性验证结果。
 - `docs/development/当前项目状态报告.md`：更新评估器部署一致性风险。
 - 本任务文档：填写修改文件、验证命令、结果和遗留风险。
@@ -85,9 +87,9 @@ FD-002 已完成场景评估框架和初版自动评估入口 `evaluate_scenario
 
 > 任务开始后填写，不要用计划代替实际结果。
 
-- **执行日期**：
-- **执行 commit**：
-- **验证命令**：
-- **实际结果**：
-- **遗留风险**：
-
+- **执行日期**：2026-08-27
+- **执行 commit**：当前工作区未创建新 commit。
+- **验证命令**：`C:\Users\pc\AppData\Local\Programs\Python\Python311\python.exe -m unittest discover -s tests -p 'test_evaluate_scenario_set_phase1.py' -v`；`C:\Users\pc\AppData\Local\Programs\Python\Python311\python.exe -m py_compile evaluate_scenario_set.py tests/test_evaluate_scenario_set_phase1.py`
+- **实际结果**：Phase 1 已完成：评估器复刻 180° 旋转、`FRAME_SKIP`、每 3 帧状态机更新和无效帧状态保持；3 项单元测试通过，脚本及测试文件编译通过。
+- **遗留风险**：Phase 2 的显式输入尺寸/标签完整性和 Phase 3 的恢复时间、`media_time`/`realtime` 模式尚未执行；尚未在真实视频和龙芯目标板上完成端到端等价验证。
+- **Phase 1 验证结论**：`NEED_REVIEW`；baseline 与 Phase 1 均因 `datasets/fall_eval_v1/manifest.csv` 缺失而未进入视频推理，未生成 TP/FP/FN 或时间指标。
