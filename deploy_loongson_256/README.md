@@ -30,6 +30,50 @@ N frames. Skipped frames reuse the latest pose result; the existing
 `FallDetector` update condition is unchanged. Runtime statistics are appended to
 `performance_log.csv`.
 
+## Remote inference client
+
+The camera client keeps local OpenCV DNN inference as the default. To send
+JPEG frames to the remote inference service, run:
+
+```bash
+python3 pose_video.py --inference-mode remote \
+  --server-url http://10.221.100.159:8000/infer --timeout 10 \
+  --camera 0 --no-display
+```
+
+The client uploads each inference frame as the multipart `file` field and
+converts the response fields `boxes`, `keypoints`, `scores`, and
+`inference_time_ms` to the same pose-result interface used by local mode.
+Connection failures, timeouts, non-2xx responses, invalid JSON, and malformed
+response arrays are reported without terminating the camera loop.
+
+Local mode remains available explicitly:
+
+```bash
+python3 pose_video.py --inference-mode local \
+  --model yolo11n-pose-256.onnx --camera 0 --no-display
+```
+
+For the first real-video test, start the server and verify one JPEG request
+first, then run remote mode with `--frame-skip 3`. Use `--no-rotate` when the
+camera orientation is already correct. Compare local and remote runs with the
+same camera, resolution, frame skip, timeout, and server model; remote client
+latency includes the network round trip.
+
+## Motion-process feature output
+
+Tracking features are sent by default as compact JSON over UDP to
+`127.0.0.1:9001`. The independent motion process can use the reference
+receiver while integrating its control logic:
+
+```bash
+python3 motion_feature_receiver.py --host 127.0.0.1 --port 9001
+```
+
+The client sends target validity, confidence, bounding box, image-relative
+horizontal error, distance ratio, timestamp, sequence number, and fall state.
+Disable this output when needed with `--disable-motion-features`.
+
 Real camera/video frame-skip benchmark (runs `1`, `2`, `5`, and `10`):
 
 ```bash

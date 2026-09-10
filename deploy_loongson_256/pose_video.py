@@ -9,8 +9,9 @@ import cv2
 
 from fall_detector import FallDetector
 import onnx_inference
-from onnx_inference import ONNXPoseDetector
+from onnx_inference import ONNXPoseDetector, RemoteInferenceError, RemotePoseDetector
 from performance_logger import PerformanceLogger
+from tracking_features import UDPFeatureSender, extract_tracking_features
 
 
 SHOW_DISPLAY = False  # Loongson headless environment: keep HighGUI disabled by default.
@@ -23,6 +24,18 @@ def parse_args():
     parser.add_argument(
         "--model", default="yolo11n-pose-256.onnx",
         help="ONNX model filename/path, e.g. yolo11n-pose-256-int8.onnx",
+    )
+    parser.add_argument(
+        "--inference-mode", choices=("local", "remote"), default="local",
+        help="run OpenCV DNN locally or send JPEG frames to the inference server",
+    )
+    parser.add_argument(
+        "--server-url", default="http://10.221.100.159:8000/infer",
+        help="remote inference endpoint",
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=10.0,
+        help="remote HTTP timeout in seconds",
     )
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
@@ -48,6 +61,12 @@ def parse_args():
     )
     parser.add_argument("--no-rotate", action="store_true")
     parser.add_argument("--no-display", action="store_true")
+    parser.add_argument("--motion-host", default="127.0.0.1")
+    parser.add_argument("--motion-port", type=int, default=9001)
+    parser.add_argument(
+        "--disable-motion-features", action="store_true",
+        help="do not send tracking features to the motion process",
+    )
     return parser.parse_args()
 
 
@@ -56,21 +75,25 @@ def main():
     show_display = SHOW_DISPLAY and not args.no_display
     frame_skip = args.frame_skip_compat or args.frame_skip
     frame_skip = max(1, frame_skip)
-    model = ONNXPoseDetector(
-        args.model,
-        imgsz=onnx_inference.IMGSZ,
-        threads=args.dnn_threads,
-        backend=args.dnn_backend,
-        target=args.dnn_target,
-    )
-    print(
-        f"[BOOT] loading {args.model} "
-        f"(configured input {model.imgsz}x{model.imgsz})"
-    )
-    print(
-        f"(ONNX input shape {model.input_shape}; "
-        "Ctrl-C to abort if too slow)"
-    )
+    if args.inference_mode == "remote":
+        model = RemotePoseDetector(args.server_url, timeout=args.timeout)
+        print(f"[BOOT] remote inference server={args.server_url} timeout={args.timeout}s")
+    else:
+        model = ONNXPoseDetector(
+            args.model,
+            imgsz=onnx_inference.IMGSZ,
+            threads=args.dnn_threads,
+            backend=args.dnn_backend,
+            target=args.dnn_target,
+        )
+        print(
+            f"[BOOT] loading {args.model} "
+            f"(configured input {model.imgsz}x{model.imgsz})"
+        )
+        print(
+            f"(ONNX input shape {model.input_shape}; "
+            "Ctrl-C to abort if too slow)"
+        )
     fall_detector = FallDetector()
     video = cv2.VideoCapture(args.camera)
     video.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
@@ -103,6 +126,10 @@ def main():
         model_name=args.model,
         input_size=model.imgsz,
     )
+    feature_sender = None if args.disable_motion_features else UDPFeatureSender(
+        args.motion_host, args.motion_port
+    )
+    feature_sequence = 0
     try:
         while True:
             ret, frame = video.read()
@@ -124,7 +151,11 @@ def main():
             detection = last_result
             if frame_count % frame_skip == 0:
                 infer_start = time.perf_counter()
-                results = model(frame)
+                try:
+                    results = model(frame)
+                except RemoteInferenceError as exc:
+                    print(f"[REMOTE][ERROR] {exc}")
+                    continue
                 infer_time_ms = (time.perf_counter() - infer_start) * 1000
                 report_inference_count += 1
                 total_inference_count += 1
@@ -149,6 +180,14 @@ def main():
                 if points_valid and frame_count % 3 == 0:
                     detection = fall_detector.detect(last_person, capture_time)
                     last_result = detection
+                if feature_sender is not None:
+                    feature_sequence += 1
+                    feature_sender.send(
+                        extract_tracking_features(
+                            result, frame.shape, detection,
+                            sequence=feature_sequence, timestamp=capture_time,
+                        )
+                    )
             elif show_display and last_pose_result is not None:
                 annotated_frame = last_pose_result.plot()
             detector_state = fall_detector.state
@@ -195,6 +234,8 @@ def main():
                     break
     finally:
         video.release()
+        if feature_sender is not None:
+            feature_sender.close()
         performance_logger.close()
         if show_display:
             cv2.destroyAllWindows()

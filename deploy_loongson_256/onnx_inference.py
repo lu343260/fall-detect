@@ -5,8 +5,13 @@ The public interface intentionally matches the current pose_video.py usage:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import socket
 import time
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+import uuid
 
 import cv2
 import numpy as np
@@ -225,9 +230,17 @@ class Keypoints:
 
 
 class PoseResult:
-    def __init__(self, frame: np.ndarray, boxes: np.ndarray, keypoints: np.ndarray):
+    def __init__(
+        self,
+        frame: np.ndarray,
+        boxes: np.ndarray,
+        keypoints: np.ndarray,
+        inference_time_ms: float | None = None,
+    ):
         self._frame = frame
         self.boxes = boxes
+        self.scores = None
+        self.inference_time_ms = inference_time_ms
         self.keypoints = Keypoints(
             keypoints[:, :, :2].astype(np.float32),
             keypoints[:, :, 2].astype(np.float32),
@@ -252,6 +265,121 @@ class PoseResult:
                     p2 = tuple(xy[person_index, second].astype(int))
                     cv2.line(image, p1, p2, (255, 0, 0), 2)
         return image
+
+
+class RemoteInferenceError(RuntimeError):
+    """Raised when the remote inference response cannot be used."""
+
+
+def _multipart_jpeg(jpeg_bytes: bytes) -> tuple[bytes, str]:
+    boundary = f"----loongson-client-{uuid.uuid4().hex}"
+    boundary_bytes = boundary.encode("ascii")
+    body = b"--" + boundary_bytes + b"\r\n"
+    body += b'Content-Disposition: form-data; name="file"; filename="frame.jpg"\r\n'
+    body += b"Content-Type: image/jpeg\r\n\r\n"
+    body += jpeg_bytes + b"\r\n--" + boundary_bytes + b"--\r\n"
+    return body, f"multipart/form-data; boundary={boundary}"
+
+
+def _as_remote_arrays(payload: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    required = ("boxes", "keypoints", "scores", "inference_time_ms")
+    missing = [name for name in required if name not in payload]
+    if missing:
+        raise RemoteInferenceError(
+            f"server response is missing fields: {', '.join(missing)}"
+        )
+    try:
+        boxes = np.asarray(payload["boxes"], dtype=np.float32)
+        keypoints = np.asarray(payload["keypoints"], dtype=np.float32)
+        scores = np.asarray(payload["scores"], dtype=np.float32)
+        inference_time_ms = float(payload["inference_time_ms"])
+    except (TypeError, ValueError) as exc:
+        raise RemoteInferenceError("server response contains invalid numeric data") from exc
+
+    if boxes.size == 0:
+        boxes = np.zeros((0, 4), dtype=np.float32)
+    elif boxes.ndim == 1 and boxes.shape == (4,):
+        boxes = boxes.reshape(1, 4)
+    if keypoints.size == 0:
+        keypoints = np.zeros((0, NUM_KEYPOINTS, 3), dtype=np.float32)
+    elif keypoints.ndim == 2 and keypoints.shape == (NUM_KEYPOINTS, 3):
+        keypoints = keypoints.reshape(1, NUM_KEYPOINTS, 3)
+    elif keypoints.ndim == 3 and keypoints.shape[1:] == (NUM_KEYPOINTS, 2):
+        try:
+            person_scores = scores.reshape(-1, 1, 1)
+            keypoints = np.concatenate(
+                (keypoints, np.broadcast_to(person_scores, (*keypoints.shape[:2], 1))),
+                axis=2,
+            )
+        except ValueError as exc:
+            raise RemoteInferenceError(
+                "coordinate-only keypoints do not match scores"
+            ) from exc
+    if scores.ndim == 0 and scores.size:
+        scores = scores.reshape(1)
+
+    if boxes.ndim != 2 or boxes.shape[1:] != (4,):
+        raise RemoteInferenceError(f"invalid boxes shape: {boxes.shape}")
+    if keypoints.ndim != 3 or keypoints.shape[1:] != (NUM_KEYPOINTS, 3):
+        raise RemoteInferenceError(f"invalid keypoints shape: {keypoints.shape}")
+    if scores.ndim != 1 or len(boxes) != len(keypoints) or len(scores) != len(boxes):
+        raise RemoteInferenceError(
+            "server response has inconsistent boxes, keypoints, and scores lengths"
+        )
+    if not np.isfinite(inference_time_ms) or inference_time_ms < 0:
+        raise RemoteInferenceError("invalid inference_time_ms")
+    return boxes, keypoints, scores, inference_time_ms
+
+
+class RemotePoseDetector:
+    """Send JPEG frames to the inference service and expose PoseResult output."""
+
+    def __init__(self, server_url: str, timeout: float = 10.0):
+        if not server_url:
+            raise ValueError("server_url must not be empty")
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+        self.server_url = server_url
+        self.timeout = timeout
+        self.imgsz = IMGSZ
+        self.input_shape = None
+
+    def __call__(self, frame: np.ndarray):
+        ok, encoded = cv2.imencode(".jpg", frame)
+        if not ok:
+            raise RemoteInferenceError("failed to encode camera frame as JPEG")
+        body, content_type = _multipart_jpeg(encoded.tobytes())
+        request = urllib_request.Request(
+            self.server_url,
+            data=body,
+            headers={"Content-Type": content_type, "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                status = getattr(response, "status", None)
+                if status is None:
+                    status = response.getcode()
+                response_body = response.read()
+        except urllib_error.HTTPError as exc:
+            raise RemoteInferenceError(f"server returned HTTP {exc.code}") from exc
+        except (urllib_error.URLError, TimeoutError, socket.timeout) as exc:
+            reason = getattr(exc, "reason", exc)
+            raise RemoteInferenceError(f"request failed: {reason}") from exc
+        if status < 200 or status >= 300:
+            raise RemoteInferenceError(f"server returned HTTP {status}")
+        try:
+            payload = json.loads(response_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RemoteInferenceError("server returned invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise RemoteInferenceError("server JSON response must be an object")
+        if payload.get("error"):
+            raise RemoteInferenceError(f"server error: {payload['error']}")
+        boxes, keypoints, scores, inference_time_ms = _as_remote_arrays(payload)
+        result = PoseResult(frame, boxes, keypoints, inference_time_ms)
+        result.scores = scores
+        return [result]
 
 
 class ONNXPoseDetector:
@@ -316,7 +444,9 @@ class ONNXPoseDetector:
         start = time.time()
         output = self.net.forward(self.output_name)
         print(f"[DNN] forward time={(time.time() - start) * 1000:.2f} ms")
-        boxes, keypoints, _ = postprocess(
+        boxes, keypoints, scores = postprocess(
             output, frame.shape[:2], ratio, padding, self.imgsz,
         )
-        return [PoseResult(frame, boxes, keypoints)]
+        result = PoseResult(frame, boxes, keypoints)
+        result.scores = scores
+        return [result]
