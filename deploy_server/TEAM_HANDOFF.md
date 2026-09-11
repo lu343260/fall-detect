@@ -51,6 +51,7 @@ git clone --depth 1 --branch codex/loongson-remote-client https://github.com/lu3
 
 ```text
 AI-Fall-Detection-System/
+├── collect_deployment_info.py
 ├── yolo11n-pose-256.onnx
 ├── deploy_server/
 │   ├── server_inference.py
@@ -184,30 +185,29 @@ python3 pose_video.py --inference-mode remote --server-url http://<SERVER_IP>:80
 
 ## 9. 队长需要回传的数据
 
-请按以下模板返回，不要只回复“可以运行”：
+大部分环境信息不用手填。请分别在项目根目录运行一次采集脚本，并把生成的
+两个 JSON 文件发回。
+
+队长电脑运行：
+
+```bash
+python collect_deployment_info.py --role server --output handoff_server.json
+```
+
+小车运行；将 `<SERVER_IP>` 换成队长电脑的局域网 IP：
+
+```bash
+python3 collect_deployment_info.py --role robot --server-url http://<SERVER_IP>:8000/infer --output handoff_robot.json
+```
+
+脚本会自动记录日期、Git 分支和 commit、系统与架构、Python、OpenCV、
+ONNX Runtime、可用 Execution Provider、局域网 IP、`/health` 状态、摄像头
+设备、实际采集分辨率和 `frame-skip`。报告不包含密码或令牌。
+
+真实动作无法由配置脚本自动判断，只需人工填写下面这份简化记录：
 
 ```text
-测试日期：
-Git 分支：codex/loongson-remote-client
-Git commit：
-
-服务器电脑：
-- 操作系统与 CPU 架构：
-- Python 版本：
-- ONNX Runtime 版本：
-- Execution Provider：
-- 局域网 IP：
-
-小车 Loongson：
-- 系统与架构：
-- Python / OpenCV 版本：
-- 摄像头设备：
-- 采集分辨率：
-- frame-skip：
-
 验证结果：
-- /health：
-- /infer：
 - 站立：
 - 左右移动：
 - 远近移动：
@@ -217,10 +217,8 @@ Git commit：
 - 网络断开：
 
 性能：
-- 服务端平均 inference_time_ms：
-- 小车端平均端到端 inference_ms：
-- camera_fps：
-- inference_fps：
+- 服务端平均 inference_time_ms（从服务端日志复制）：
+- 小车端 inference_ms / camera_fps / inference_fps（从客户端日志复制）：
 
 异常和日志路径：
 ```
